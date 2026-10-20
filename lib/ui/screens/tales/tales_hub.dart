@@ -1,0 +1,327 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../../art/scene_painter.dart';
+import '../../../data/tale_genres.dart';
+import '../../../data/tales/tales.dart';
+import '../../../models/tale.dart';
+import '../../../services/ai/tale_narrator.dart';
+import '../../../services/settings.dart';
+import '../../../services/tale_store.dart';
+import '../../../theme/ui.dart';
+import '../../widgets/ai_gate.dart';
+import '../../widgets/bright_art.dart';
+import 'tale_screen.dart';
+import 'tale_terminal_screen.dart';
+
+/// Opens a story in the layout it was last played in.
+Route<void> taleRoute(Tale t) => MaterialPageRoute(builder: (_) => t.terminal ? TaleTerminalScreen(tale: t) : TaleScreen(tale: t));
+
+Future<void> openTale(BuildContext context, String id) async {
+  final t = await context.read<TaleStore>().load(id);
+  if (t == null || !context.mounted) return;
+  Navigator.of(context).push(taleRoute(t));
+}
+
+Future<void> startPreset(BuildContext context, TalePreset p) async {
+  final t = Tale.create(title: p.title, genre: p.genre, engine: TaleEngine.preset, presetId: p.id)..terminal = context.read<SettingsController>().taleTerminal;
+  await context.read<TaleStore>().save(t);
+  if (!context.mounted) return;
+  Navigator.of(context).push(taleRoute(t));
+}
+
+/// Home content for text adventures.
+class TalesHub extends StatefulWidget {
+  const TalesHub({super.key});
+
+  @override
+  State<TalesHub> createState() => _TalesHubState();
+}
+
+class _TalesHubState extends State<TalesHub> {
+  String? _genre;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<TaleStore>();
+    final settings = context.watch<SettingsController>();
+    final active = store.tales.where((t) => !t.finished).toList();
+    final latest = active.isEmpty ? null : active.first;
+    final presets = talePresets.where((p) => _genre == null || p.genre == _genre).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (latest != null) ...[
+        _ContinueTale(summary: latest),
+        const SizedBox(height: 12),
+      ],
+      AppCard(
+        onTap: () => showNewTaleSheet(context, genre: _genre),
+        borderColor: settings.useAiText ? AppColors.accent : null,
+        child: Row(children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(color: settings.useAiText ? AppColors.accentSoft : AppColors.surface2, borderRadius: BorderRadius.circular(12)),
+            child: Icon(Icons.auto_awesome, color: settings.useAiText ? AppColors.accent : AppColors.textFaint),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Write a story with AI', style: T.h3()),
+              const SizedBox(height: 2),
+              Text(settings.useAiText ? 'Pick any genre and an AI narrator improvises a story around your choices.' : 'Add an AI key (Vercel or OpenRouter) in Settings to unlock endless AI stories.', style: T.small()),
+            ]),
+          ),
+          const Icon(Icons.chevron_right, color: AppColors.textFaint),
+        ]),
+      ),
+      const SectionLabel('Genres'),
+      SizedBox(
+        height: 40,
+        child: ListView(scrollDirection: Axis.horizontal, children: [
+          Padding(padding: const EdgeInsets.only(right: 6), child: ChoiceChip(label: const Text('All'), selected: _genre == null, onSelected: (_) => setState(() => _genre = null))),
+          for (final g in taleGenres)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                avatar: Icon(g.icon, size: 16, color: _genre == g.id ? AppColors.text : g.color),
+                label: Text(g.name),
+                selected: _genre == g.id,
+                onSelected: (_) => setState(() => _genre = _genre == g.id ? null : g.id),
+              ),
+            ),
+        ]),
+      ),
+      SectionLabel(_genre == null ? 'Featured stories' : '${genreById(_genre!).name} stories'),
+      if (presets.isEmpty)
+        AppCard(
+          onTap: () => showNewTaleSheet(context, genre: _genre),
+          child: Text('No handcrafted ${genreById(_genre!).name.toLowerCase()} story yet. Tap to let the AI write one.', style: T.small()),
+        ),
+      for (final p in presets)
+        Padding(padding: const EdgeInsets.only(bottom: 10), child: _PresetCard(preset: p)),
+      if (store.tales.isNotEmpty) ...[
+        const SectionLabel('Your stories'),
+        RowGroup(children: [
+          for (final t in store.tales)
+            Dismissible(
+              key: ValueKey(t.id),
+              direction: DismissDirection.endToStart,
+              background: Container(alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), color: AppColors.danger.withValues(alpha: 0.15), child: const Icon(Icons.delete_outline, color: AppColors.danger)),
+              confirmDismiss: (_) => confirm(context, title: 'Delete story?', message: '"${t.title}" will be permanently deleted.'),
+              onDismissed: (_) => store.delete(t.id),
+              child: ListRow(
+                leading: Icon(genreById(t.genre).icon, size: 20, color: genreById(t.genre).color),
+                title: t.title,
+                subtitle: '${genreById(t.genre).name}${t.isAi ? ' · AI' : ''} · ${t.finished ? switch (t.ending) { 'good' => 'Good ending', 'bad' => 'Bad ending', _ => 'Finished' } : '${t.turns} turns'}',
+                onTap: () => openTale(context, t.id),
+              ),
+            ),
+        ]),
+      ],
+    ]);
+  }
+}
+
+class _ContinueTale extends StatelessWidget {
+  const _ContinueTale({required this.summary});
+  final TaleSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = genreById(summary.genre);
+    return AppCard(
+      onTap: () => openTale(context, summary.id),
+      padding: const EdgeInsets.all(16),
+      child: Row(children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(color: g.color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(14)),
+          child: Icon(g.icon, color: g.color),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('CONTINUE', style: T.overline(color: g.color)),
+            const SizedBox(height: 4),
+            Text(summary.title, style: T.h3(), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${g.name} · ${summary.turns} turns · ${g.healthLabel} ${summary.health}', style: T.small(), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+        Container(
+          width: 40,
+          height: 40,
+          decoration: const BoxDecoration(color: AppColors.text, shape: BoxShape.circle),
+          child: const Icon(Icons.play_arrow_rounded, color: AppColors.bg),
+        ),
+      ]),
+    );
+  }
+}
+
+class _PresetCard extends StatelessWidget {
+  const _PresetCard({required this.preset});
+  final TalePreset preset;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = genreById(preset.genre);
+    return AppCard(
+      padding: EdgeInsets.zero,
+      onTap: () => startPreset(context, preset),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+          child: SizedBox(
+            height: 136,
+            child: Stack(fit: StackFit.expand, children: [
+              BrightArt(child: SceneView(location: g.scene, time: g.time, mood: 'mystery', seed: preset.id.hashCode & 0xffff)),
+              const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, stops: [0.55, 1], colors: [Colors.transparent, Color(0xB3000000)]))),
+              Positioned(
+                left: 14,
+                bottom: 10,
+                right: 14,
+                child: Row(children: [
+                  Icon(g.icon, size: 14, color: g.color),
+                  const SizedBox(width: 6),
+                  Text(g.name.toUpperCase(), style: T.overline(color: g.color)),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(preset.title, style: T.h3()),
+            const SizedBox(height: 4),
+            Text(preset.blurb, style: T.small()),
+            const SizedBox(height: 10),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              Tag('~${preset.minutes} min', icon: Icons.schedule),
+              Tag('${preset.endings} endings', icon: Icons.alt_route),
+              const Tag('Offline', icon: Icons.wifi_off_outlined),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Create an AI-narrated story in any genre.
+void showNewTaleSheet(BuildContext context, {String? genre}) {
+  final settings = context.read<SettingsController>();
+  if (!settings.useAiText) {
+    showAiUnavailable(context, feature: 'AI-written stories');
+    return;
+  }
+  showAppSheet(context, builder: (ctx) => _NewTale(initialGenre: genre ?? 'scifi'));
+}
+
+class _NewTale extends StatefulWidget {
+  const _NewTale({required this.initialGenre});
+  final String initialGenre;
+
+  @override
+  State<_NewTale> createState() => _NewTaleState();
+}
+
+class _NewTaleState extends State<_NewTale> {
+  late String _genre = widget.initialGenre;
+  final _title = TextEditingController();
+  final _premise = TextEditingController();
+  final _name = TextEditingController();
+  bool _busy = false;
+  late bool _terminal = context.read<SettingsController>().taleTerminal;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _premise.dispose();
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _suggest() async {
+    setState(() => _busy = true);
+    try {
+      final (t, p) = await TaleNarrator(context.read<SettingsController>()).idea(_genre, seed: _premise.text.trim());
+      _title.text = t;
+      _premise.text = p;
+    } catch (e) {
+      if (mounted) showToast(context, 'Couldn\'t get an idea: $e', icon: Icons.error_outline);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _start() async {
+    final g = genreById(_genre);
+    final t = Tale.create(
+      title: _title.text.trim().isEmpty ? 'A ${g.name} Story' : _title.text.trim(),
+      genre: _genre,
+      engine: TaleEngine.ai,
+      protagonist: _name.text.trim().isEmpty ? 'You' : _name.text.trim(),
+      premise: _premise.text.trim(),
+    )..terminal = _terminal;
+    final store = context.read<TaleStore>();
+    final nav = Navigator.of(context);
+    await store.save(t);
+    nav.pop();
+    nav.push(taleRoute(t));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final g = genreById(_genre);
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('New AI story', style: T.h2()),
+          const SizedBox(height: 4),
+          Text(g.tagline, style: T.small()),
+          const SizedBox(height: 16),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final x in taleGenres)
+              ChoiceChip(
+                avatar: Icon(x.icon, size: 16, color: _genre == x.id ? AppColors.text : x.color),
+                label: Text(x.name),
+                selected: _genre == x.id,
+                onSelected: (_) => setState(() => _genre = x.id),
+              ),
+          ]),
+          const SizedBox(height: 16),
+          TextField(controller: _name, style: T.body(), decoration: const InputDecoration(labelText: 'Your character\'s name (optional)')),
+          const SizedBox(height: 10),
+          TextField(controller: _title, style: T.body(), decoration: const InputDecoration(labelText: 'Title (optional)')),
+          const SizedBox(height: 10),
+          TextField(controller: _premise, style: T.body(), minLines: 2, maxLines: 4, decoration: const InputDecoration(labelText: 'Premise or idea (optional)', hintText: 'A lighthouse keeper receives letters from the future')),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _busy ? null : _suggest,
+              icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.lightbulb_outline, size: 16),
+              label: Text('Suggest an idea', style: T.small(color: AppColors.text)),
+            ),
+          ),
+          const SizedBox(height: 4),
+          SegmentedButton<bool>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: false, label: Text('Book'), icon: Icon(Icons.chrome_reader_mode_outlined, size: 16)),
+              ButtonSegment(value: true, label: Text('Terminal'), icon: Icon(Icons.terminal, size: 16)),
+            ],
+            selected: {_terminal},
+            onSelectionChanged: (v) => setState(() => _terminal = v.first),
+          ),
+          const SizedBox(height: 12),
+          AppButton(label: 'Begin', icon: Icons.play_arrow_rounded, kind: ButtonKind.accent, onPressed: _busy ? null : _start),
+        ]),
+      ),
+    );
+  }
+}
