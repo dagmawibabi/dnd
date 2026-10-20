@@ -13,6 +13,7 @@ import '../data/inventory_rules.dart';
 import '../data/progression.dart';
 import '../services/achievements.dart';
 import '../services/ai/dungeon_master.dart';
+import '../services/ai/gateway_client.dart';
 import '../services/audio/audio_service.dart';
 import '../services/audio/synth.dart';
 import '../services/game_store.dart';
@@ -126,6 +127,39 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   void note(String text) => _note(text);
   @override
   Future<void> act(String text) => freeText(text);
+
+  @override
+  Future<void> illustrate(String text, {bool video = false}) {
+    images.resume();
+    final short = text.length > 400 ? '${text.substring(0, 400)}…' : text;
+    return effect('moment', short, force: true, video: video);
+  }
+
+  @override
+  bool get canRegenerate => isAi && canRewind;
+
+  @override
+  Future<void> regenerate() async {
+    if (!canRegenerate) return;
+    final action = adventure.log.length > _snapshotLogLength ? adventure.log[_snapshotLogLength] : null;
+    final text = action?.kind == LogKind.player ? action!.text : null;
+    rewind();
+    if (text != null) await freeText(text);
+  }
+
+  DateTime _clock = DateTime.now();
+
+  /// Adds the time since the last save to this story's play time.
+  void _bankTime() {
+    final now = DateTime.now();
+    final secs = now.difference(_clock).inSeconds;
+    _clock = now;
+    if (secs <= 0 || secs > 6 * 3600) return;
+    adventure.playSeconds += secs;
+    // Deferred: this can run while a screen is being torn down.
+    final ach = achievements;
+    if (ach != null) Future(() => ach.add(Stat.playSeconds, secs));
+  }
   @override
   String portraitKey(Npc npc) => 'npc_${adventure.id}_${npc.id}';
 
@@ -193,6 +227,30 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     }
   }
 
+  /// Reference portraits for a picture: the hero, then party members and
+  /// people named in [text] (or the whole party for scenes).
+  List<(String, String)> faceRefs(String text, {bool party = false}) {
+    final t = text.toLowerCase();
+    bool named(String name) {
+      final first = name.split(' ').first.toLowerCase();
+      return first.length >= 3 && t.contains(first);
+    }
+
+    final out = <(String, String)>[];
+    void add(String name, String? path) {
+      if (path != null && path.isNotEmpty && !out.any((r) => r.$1 == name)) out.add((name, path));
+    }
+
+    add(hero.name, hero.portrait.aiImagePath);
+    for (final c in adventure.companions) {
+      if (party || named(c.name)) add(c.name, c.portrait.aiImagePath);
+    }
+    for (final n in adventure.npcs) {
+      if (named(n.name)) add(n.name, n.portrait.aiImagePath);
+    }
+    return out.take(3).toList();
+  }
+
   String? _voiceOf(String speaker) {
     final p = adventure.personNamed(speaker);
     return p == null ? null : adventure.voices[p.id];
@@ -258,6 +316,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   Future<void> flush() {
     _saveTimer?.cancel();
     _saveTimer = null;
+    _bankTime();
     return store.saveAdventure(adventure);
   }
 
@@ -1473,7 +1532,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     if (!settings.aiAutoImages) return;
     if (settings.useAiVideo && settings.videoScenes && !images.isSuspended('video') && await _sceneVideo()) return;
     if (!settings.useAiScenes) return;
-    final path = await images.generate('scene_${adventure.id}_${stableHash(s.title)}', _scenePrompt(s), size: '1536x1024', usageTarget: adventure.usage, style: artStyle);
+    final path = await images.generate('scene_${adventure.id}_${stableHash(s.title)}', _scenePrompt(s), size: '1536x1024', usageTarget: adventure.usage, style: artStyle, references: faceRefs(s.imagePrompt, party: true));
     if (path != null) {
       adventure.sceneImages[s.title] = path;
       if (adventure.scene.title == s.title) adventure.sceneImagePath = path;
@@ -1487,7 +1546,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
 
   Future<void> _maybeSceneImageForced() async {
     final s = adventure.scene;
-    final path = await images.generate('scene_${adventure.id}_${stableHash(s.title)}', _scenePrompt(s), size: '1536x1024', usageTarget: adventure.usage, style: artStyle);
+    final path = await images.generate('scene_${adventure.id}_${stableHash(s.title)}', _scenePrompt(s), size: '1536x1024', usageTarget: adventure.usage, style: artStyle, references: faceRefs(s.imagePrompt, party: true));
     if (path != null) {
       adventure.sceneImages[s.title] = path;
       if (adventure.scene.title == s.title) adventure.sceneImagePath = path;
@@ -1575,8 +1634,47 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   Combatant? get currentCombatant => adventure.combat?.current;
   bool get isPlayerTurn => inCombat && !combatBusy && pendingRoll == null && (currentCombatant?.isPlayer ?? false) && !(currentCombatant?.down ?? true);
 
+  /// Combat lines since the last narrated round.
+  final List<String> _roundLines = [];
+
+  /// Retells the latest round as prose (Settings → AI combat narration).
+  Future<void> _narrateCombat({String? outcome}) async {
+    final lines = List<String>.of(_roundLines);
+    _roundLines.clear();
+    if (!settings.aiCombatNarration || !settings.useAiText || _disposed) return;
+    if (lines.length < 2 && outcome == null) return;
+    final c = adventure.combat;
+    final foes = c == null ? '' : c.combatants.where((x) => !x.isPlayer && !x.isAlly).map((x) => x.name).toSet().join(', ');
+    final client = GatewayClient(apiKey: settings.apiKey, target: adventure.usage);
+    try {
+      final text = await client.complete(
+        model: settings.fastModel.isEmpty ? settings.textModel : settings.fastModel,
+        temperature: 0.9,
+        maxTokens: 1500,
+        messages: [
+          ChatMessage('system', 'You narrate tactical D&D combat for a solo player. Turn the combat log into ${outcome == null ? '2-3' : '2-4'} vivid sentences of second-person prose ("you" is ${hero.name}). Keep every outcome exactly as logged: who attacked whom, hits, misses, who fell. No numbers, dice or rules talk. ${settings.matureContent ? 'Grit is fine, no gore.' : 'Keep it PG-13.'} Plain prose only.', cache: true),
+          ChatMessage('user', 'Place: ${adventure.scene.title}. Party: ${adventure.party.map((p) => p.name).join(', ')}.${foes.isEmpty ? '' : ' Foes: $foes.'}\nLOG:\n${lines.take(18).join('\n')}${outcome == null ? '' : '\nThe fight ends: $outcome. Close the scene with a strong final beat.'}'),
+        ],
+      );
+      final prose = text.trim();
+      if (prose.isEmpty || _disposed) return;
+      adventure.log.add(LogEntry(kind: LogKind.narration, text: prose, meta: {'combatTale': true, if (client.spentTokens > 0) 'tok': client.spentTokens, if (client.spentCost > 0) 'usd': client.spentCost}));
+      narrator?.say(prose);
+      _notify();
+      save();
+    } catch (_) {
+      // Narration is a flourish; the fight goes on without it.
+    } finally {
+      client.close();
+    }
+  }
+
   void _logCombat(List<CombatEvent> events) {
     lastCombatEvents = events;
+    for (final e in events) {
+      if (e.fx != CombatFx.buff || e.amount > 0) _roundLines.add(e.text);
+    }
+    if (_roundLines.length > 30) _roundLines.removeRange(0, _roundLines.length - 30);
     final partyIds = adventure.combat?.combatants.where((c) => c.isPlayer || c.isAlly).map((c) => c.id).toSet() ?? {};
     for (final e in events) {
       _sys(e.text, kind: LogKind.combat, meta: {'fx': e.fx.name, 'details': ?e.details});
@@ -1659,7 +1757,10 @@ class AdventureController extends ChangeNotifier implements StoryHost {
             if (st.victory || st.defeat) continue;
           }
         }
-        if (cur.isPlayer) break;
+        if (cur.isPlayer) {
+          unawaited(_narrateCombat());
+          break;
+        }
         await Future.delayed(const Duration(milliseconds: 650));
         if (_disposed) return;
         _logCombat(engine.autoTurn());
@@ -1838,6 +1939,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   }
 
   Future<void> _endCombat({required bool victory, bool fled = false}) async {
+    await _narrateCombat(outcome: victory ? 'victory' : (fled ? 'the party escapes' : 'defeat')).timeout(const Duration(seconds: 25), onTimeout: () {});
     final engine = CombatEngine(adventure);
     final xp = victory ? engine.xpReward : 0;
     final foes = engine.state.enemies.map((e) => e.name).join(', ');
@@ -2018,7 +2120,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   int _lastEffectTurn = -10;
 
   /// A special-effect image (or video) for a big moment, if enabled for it.
-  Future<void> effect(String moment, String description, {bool force = false}) async {
+  Future<void> effect(String moment, String description, {bool force = false, bool? video}) async {
     if (_disposed || (!force && (!settings.effectOn(moment) || !settings.aiAutoImages))) return;
     if (!force && adventure.turns - _lastEffectTurn < 2 && moment != 'levelup' && moment != 'victory') return;
     _lastEffectTurn = adventure.turns;
@@ -2027,16 +2129,16 @@ class AdventureController extends ChangeNotifier implements StoryHost {
         'Setting: ${adventure.scene.title.isEmpty ? adventure.setting : adventure.scene.title}, ${adventure.scene.time}. '
         'The hero ${hero.name} looks like: $look. Dynamic composition, magical light, particles and motion.';
     final key = 'fx_${adventure.id}_${DateTime.now().millisecondsSinceEpoch}';
-    var video = settings.useAiVideo && settings.videoEffects && !images.isSuspended('video');
-    var path = video ? await images.generateVideo(key, prompt, usageTarget: adventure.usage) : null;
+    var film = video ?? (settings.useAiVideo && settings.videoEffects && !images.isSuspended('video'));
+    var path = film ? await images.generateVideo(key, prompt, usageTarget: adventure.usage) : null;
     if (path == null && settings.useAiImages && !images.isSuspended('image') && !_disposed) {
-      video = false;
-      path = await images.generate(key, prompt, size: '1536x1024', usageTarget: adventure.usage, category: 'effects', style: artStyle);
+      film = false;
+      path = await images.generate(key, prompt, size: '1536x1024', usageTarget: adventure.usage, category: 'effects', style: artStyle, references: faceRefs(description));
     }
     if (path == null || _disposed) return;
     final cost = images.costs[path] ?? 0;
-    adventure.log.add(LogEntry(kind: LogKind.system, text: description, meta: {'media': path, 'video': video, 'moment': moment, if (cost > 0) 'usd': cost}));
-    adventure.addMedia(MediaItem(path: path, video: video, kind: 'effect', caption: description, turn: adventure.turns, cost: cost));
+    adventure.log.add(LogEntry(kind: LogKind.system, text: description, meta: {'media': path, 'video': film, 'moment': moment, if (cost > 0) 'usd': cost}));
+    adventure.addMedia(MediaItem(path: path, video: film, kind: 'effect', caption: description, turn: adventure.turns, cost: cost));
     _notify();
     save();
   }

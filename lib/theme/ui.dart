@@ -460,3 +460,21 @@ Future<bool> confirm(BuildContext context, {required String title, required Stri
   );
   return r == true;
 }
+
+/// Tighter chips: no 48px touch-target padding between rows of chips.
+class CompactChips extends StatelessWidget {
+  const CompactChips({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    return Theme(
+      data: t.copyWith(
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        chipTheme: t.chipTheme.copyWith(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), labelPadding: const EdgeInsets.symmetric(horizontal: 4)),
+      ),
+      child: child,
+    );
+  }
+}

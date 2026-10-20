@@ -56,6 +56,15 @@ abstract class StoryHost implements Listenable {
 
   /// Sends a free-text action to the story.
   Future<void> act(String text);
+
+  /// Paints (or films) a passage of the story into the feed.
+  Future<void> illustrate(String text, {bool video = false});
+
+  /// Whether the last AI turn can be written again.
+  bool get canRegenerate;
+
+  /// Undoes the last turn and asks the AI again with the same action.
+  Future<void> regenerate();
   void note(String text);
   void save();
   void refresh();

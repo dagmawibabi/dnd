@@ -1,13 +1,15 @@
 import 'tale_format.dart';
+import 'extended_chapters.dart';
 
 const redMesa = TalePreset(
   id: 'red_mesa',
   title: 'Showdown at Red Mesa',
   genre: 'western',
   blurb: 'Your brother owes the Calloway gang two thousand dollars. They\'re riding in at noon to collect.',
-  minutes: 15,
+  minutes: 30,
   start: 'town',
   nodes: {
+    ...mesaChapter,
     'town': TaleNode(
       'Red Mesa bakes under a white sun. Your brother Eli sits on the saloon steps with a black eye and an empty holster. "They\'ll be here at noon," he says. "Calloway and four men. I\'m sorry."\n\nYou have three hours.',
       title: 'Main Street',
@@ -15,7 +17,7 @@ const redMesa = TalePreset(
         TaleOption('Visit the sheriff', 'sheriff', unless: 'sheriff'),
         TaleOption('Ask around the saloon', 'saloon', unless: 'saloon'),
         TaleOption('Ride out to the gold claim', 'claim', unless: 'claim'),
-        TaleOption('Wait for noon', 'noon'),
+        TaleOption('Wait for noon', 'rail_bell'),
       ],
     ),
     'sheriff': TaleNode(
@@ -119,9 +121,10 @@ const rainLedger = TalePreset(
   title: 'The Rain-Soaked Ledger',
   genre: 'noir',
   blurb: 'A banker is dead in his office, the window open, the rain coming in. Everyone has an alibi but the rain.',
-  minutes: 15,
+  minutes: 35,
   start: 'office',
   nodes: {
+    ...ledgerChapter,
     'office': TaleNode(
       'Rain hammers the city like it owes it money. Your office smells of cold coffee and old regrets. The woman in your doorway wears a black veil and a diamond ring. "My husband, Arthur Vance, fell from his office window last night. The police say suicide. I say murder. I\'ll pay double."',
       title: 'Your Office',
@@ -144,7 +147,7 @@ const rainLedger = TalePreset(
         TaleOption('Question Clara', 'clara', unless: 'clara'),
         TaleOption('Question Moretti', 'moretti', unless: 'moretti'),
         TaleOption('Question Mr. Hale', 'hale', unless: 'hale'),
-        TaleOption('Make your accusation', 'accuse'),
+        TaleOption('Make your accusation', 'last_edition'),
       ],
     ),
     'search': TaleNode(
@@ -179,7 +182,7 @@ const rainLedger = TalePreset(
       'You grab the ledger and take the stairs three at a time. In a doorway out of the rain, you read it: bribes, names, dates. Hale\'s name is on every page. So is Mrs. Vance\'s — she was in on it.',
       title: 'The Stairwell',
       gives: 'Ledger',
-      options: [TaleOption('Go back and confront them', 'accuse')],
+      options: [TaleOption('Go back and confront them', 'last_edition')],
     ),
     'beaten': TaleNode(
       'Hale\'s hired muscle is faster than he looks. You wake in an alley with a split lip, the rain washing the blood off. No ledger. But you know where it is.',

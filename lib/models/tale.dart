@@ -135,6 +135,32 @@ class Tale with WorldData implements StoryRecord {
     return partial.length == 1 ? partial.single : null;
   }
 
+  /// Puts the story back to [o] (an earlier snapshot of itself), keeping what
+  /// must never rewind: spend, generated media, private notes and chats.
+  void restoreFrom(Tale o) {
+    title = o.title;
+    node = o.node;
+    flags = o.flags;
+    inventory = o.inventory;
+    health = o.health;
+    log = o.log;
+    choices = o.choices;
+    aiHistory = o.aiHistory;
+    memory = o.memory;
+    turns = o.turns;
+    finished = o.finished;
+    ending = o.ending;
+    status = o.status;
+    npcs = o.npcs;
+    canon = o.canon;
+    goals = o.goals;
+    scene = o.scene;
+    map = o.map;
+    sceneImagePath = o.sceneImagePath;
+    pendingNotes = o.pendingNotes;
+    bonds = o.bonds;
+  }
+
   /// Adds or updates a canon entry by name.
   void remember(String kind, String name, String text) {
     if (name.trim().isEmpty) return;
@@ -254,6 +280,7 @@ class Tale with WorldData implements StoryRecord {
         'updated': updatedAt.toIso8601String(),
         'usage': usage,
         'preset': presetId,
+        'play': playSeconds,
       };
 }
 
@@ -271,4 +298,5 @@ class TaleSummary {
   String? get presetId => j['preset'];
   DateTime get updatedAt => DateTime.tryParse(j['updated'] ?? '') ?? DateTime.now();
   Map<String, num> get usage => Map<String, num>.from(j['usage'] ?? const {});
+  int get playSeconds => (j['play'] as num?)?.toInt() ?? 0;
 }

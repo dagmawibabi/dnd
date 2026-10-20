@@ -11,6 +11,7 @@ import '../../../services/tale_store.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/ai_gate.dart';
 import '../../widgets/bright_art.dart';
+import '../../widgets/import_adventure_button.dart';
 import 'tale_screen.dart';
 import 'tale_terminal_screen.dart';
 
@@ -66,9 +67,9 @@ class _TalesHubState extends State<TalesHub> {
           const SizedBox(width: 14),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Write a story with AI', style: T.h3()),
+              Text('New story', style: T.h3()),
               const SizedBox(height: 2),
-              Text(settings.useAiText ? 'Pick any genre and an AI narrator improvises a story around your choices.' : 'Add an AI key (Vercel or OpenRouter) in Settings to unlock endless AI stories.', style: T.small()),
+              Text(settings.useAiText ? 'An original adventure in any genre' : 'Set up your AI narrator', style: T.small()),
             ]),
           ),
           const Icon(Icons.chevron_right, color: AppColors.textFaint),
@@ -76,20 +77,20 @@ class _TalesHubState extends State<TalesHub> {
       ),
       const SectionLabel('Genres'),
       SizedBox(
-        height: 40,
-        child: ListView(scrollDirection: Axis.horizontal, children: [
+        height: 36,
+        child: CompactChips(child: ListView(scrollDirection: Axis.horizontal, children: [
           Padding(padding: const EdgeInsets.only(right: 6), child: ChoiceChip(label: const Text('All'), selected: _genre == null, onSelected: (_) => setState(() => _genre = null))),
           for (final g in taleGenres)
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: ChoiceChip(
                 avatar: Icon(g.icon, size: 16, color: _genre == g.id ? AppColors.text : g.color),
-                label: Text(g.name),
+                label: Text(g.name, style: T.small(color: AppColors.text)),
                 selected: _genre == g.id,
                 onSelected: (_) => setState(() => _genre = _genre == g.id ? null : g.id),
               ),
             ),
-        ]),
+        ])),
       ),
       SectionLabel(_genre == null ? 'Featured stories' : '${genreById(_genre!).name} stories'),
       if (presets.isEmpty)
@@ -97,8 +98,13 @@ class _TalesHubState extends State<TalesHub> {
           onTap: () => showNewTaleSheet(context, genre: _genre),
           child: Text('No handcrafted ${genreById(_genre!).name.toLowerCase()} story yet. Tap to let the AI write one.', style: T.small()),
         ),
-      for (final p in presets)
-        Padding(padding: const EdgeInsets.only(bottom: 10), child: _PresetCard(preset: p)),
+      LayoutBuilder(builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 650 ? 2 : 1;
+        final width = (constraints.maxWidth - (columns - 1) * 16) / columns;
+        return Wrap(spacing: 16, runSpacing: 16, children: [
+          for (final p in presets) SizedBox(width: width, child: _PresetCard(preset: p)),
+        ]);
+      }),
       if (store.tales.isNotEmpty) ...[
         const SectionLabel('Your stories'),
         RowGroup(children: [
@@ -193,7 +199,7 @@ class _PresetCard extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(preset.title, style: T.h3()),
+            Text(preset.title, style: T.h3().copyWith(letterSpacing: 0)),
             const SizedBox(height: 4),
             Text(preset.blurb, style: T.small()),
             const SizedBox(height: 10),
@@ -211,12 +217,7 @@ class _PresetCard extends StatelessWidget {
 
 /// Create an AI-narrated story in any genre.
 void showNewTaleSheet(BuildContext context, {String? genre}) {
-  final settings = context.read<SettingsController>();
-  if (!settings.useAiText) {
-    showAiUnavailable(context, feature: 'AI-written stories');
-    return;
-  }
-  showAppSheet(context, builder: (ctx) => _NewTale(initialGenre: genre ?? 'scifi'));
+  Navigator.of(context).push(MaterialPageRoute(builder: (_) => _NewTale(initialGenre: genre ?? 'scifi')));
 }
 
 class _NewTale extends StatefulWidget {
@@ -257,6 +258,10 @@ class _NewTaleState extends State<_NewTale> {
   }
 
   Future<void> _start() async {
+    if (!context.read<SettingsController>().useAiText) {
+      showAiUnavailable(context, feature: 'AI-written stories');
+      return;
+    }
     final g = genreById(_genre);
     final t = Tale.create(
       title: _title.text.trim().isEmpty ? 'A ${g.name} Story' : _title.text.trim(),
@@ -275,24 +280,24 @@ class _NewTaleState extends State<_NewTale> {
   @override
   Widget build(BuildContext context) {
     final g = genreById(_genre);
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
+    return Scaffold(
+      appBar: AppBar(title: const Text('New adventure'), actions: const [ImportAdventureButton()]),
+      body: SafeArea(child: ContentWidth(child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('New AI story', style: T.h2()),
+          Text('New text adventure', style: T.h2()),
           const SizedBox(height: 4),
           Text(g.tagline, style: T.small()),
           const SizedBox(height: 16),
-          Wrap(spacing: 6, runSpacing: 6, children: [
+          CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final x in taleGenres)
               ChoiceChip(
                 avatar: Icon(x.icon, size: 16, color: _genre == x.id ? AppColors.text : x.color),
-                label: Text(x.name),
+                label: Text(x.name, style: T.small(color: AppColors.text)),
                 selected: _genre == x.id,
                 onSelected: (_) => setState(() => _genre = x.id),
               ),
-          ]),
+          ])),
           const SizedBox(height: 16),
           TextField(controller: _name, style: T.body(), decoration: const InputDecoration(labelText: 'Your character\'s name (optional)')),
           const SizedBox(height: 10),
@@ -303,7 +308,7 @@ class _NewTaleState extends State<_NewTale> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: _busy ? null : _suggest,
+              onPressed: _busy || !context.watch<SettingsController>().useAiText ? null : _suggest,
               icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.lightbulb_outline, size: 16),
               label: Text('Suggest an idea', style: T.small(color: AppColors.text)),
             ),
@@ -321,7 +326,7 @@ class _NewTaleState extends State<_NewTale> {
           const SizedBox(height: 12),
           AppButton(label: 'Begin', icon: Icons.play_arrow_rounded, kind: ButtonKind.accent, onPressed: _busy ? null : _start),
         ]),
-      ),
+      ))),
     );
   }
 }

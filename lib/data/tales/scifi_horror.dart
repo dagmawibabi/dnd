@@ -1,13 +1,15 @@
 import 'tale_format.dart';
+import 'extended_chapters.dart';
 
 const silentShip = TalePreset(
   id: 'silent_ship',
   title: 'The Silent Ship',
   genre: 'scifi',
   blurb: 'A freighter has been drifting for nine years. Its distress beacon switched on yesterday.',
-  minutes: 15,
+  minutes: 30,
   start: 'dock',
   nodes: {
+    ...shipChapter,
     'dock': TaleNode(
       'Your salvage tug kisses the hull of the Meridian with a soft clang. Nine years adrift, every light dead, and yet the distress beacon began transmitting yesterday — your name, repeated, in your own voice.\n\nThe airlock wheel turns too easily. As if someone oiled it.',
       title: 'Docking Ring',
@@ -45,7 +47,7 @@ const silentShip = TalePreset(
       'Frost furs the walls. Your helmet lamp catches footprints in the frost — boot prints, your size, your tread pattern, leading deeper. To the left, the engineering hatch. Ahead, the long spine corridor to the bridge.',
       title: 'Spine Corridor',
       options: [
-        TaleOption('Follow the footprints to the bridge', 'bridge'),
+        TaleOption('Follow the footprints to the bridge', 'signal_lock'),
         TaleOption('Detour through engineering', 'engineering', unless: 'engine_done'),
         TaleOption('Check the crew quarters', 'quarters', unless: 'quarters_done'),
       ],
@@ -57,7 +59,7 @@ const silentShip = TalePreset(
       gives: 'Cutting torch',
       options: [
         TaleOption('Go to engineering', 'engineering', unless: 'engine_done'),
-        TaleOption('Head for the bridge', 'bridge'),
+        TaleOption('Head for the bridge', 'signal_lock'),
       ],
     ),
     'engineering': TaleNode(
@@ -76,20 +78,20 @@ const silentShip = TalePreset(
       damage: 25,
       sets: 'power',
       status: 'Suit breached',
-      options: [TaleOption('Stagger on to the bridge', 'bridge')],
+      options: [TaleOption('Stagger on to the bridge', 'signal_lock')],
     ),
     'reactor': TaleNode(
       'The reactor coughs, then hums. Lights flood the ship. Somewhere far forward, something screams — not in pain. In delight.',
       title: 'Engineering',
       sets: 'power',
-      options: [TaleOption('Run to the bridge', 'bridge')],
+      options: [TaleOption('Run to the bridge', 'signal_lock')],
     ),
     'corridor2': TaleNode(
       'You leave engineering. The footprints in the frost have changed: now they come back toward you, and stop right where you stand.',
       title: 'Spine Corridor',
       status: 'Being watched',
       options: [
-        TaleOption('Go to the bridge', 'bridge'),
+        TaleOption('Go to the bridge', 'signal_lock'),
         TaleOption('Check the crew quarters', 'quarters', unless: 'quarters_done'),
       ],
     ),
@@ -146,9 +148,10 @@ const hollowLane = TalePreset(
   title: 'The House on Hollow Lane',
   genre: 'horror',
   blurb: 'You inherited a house from a grandmother you never met. The neighbors will not look at it.',
-  minutes: 15,
+  minutes: 30,
   start: 'arrive',
   nodes: {
+    ...houseChapter,
     'arrive': TaleNode(
       'The house on Hollow Lane leans like it is listening. The estate lawyer handed you the keys and refused to drive past the gate. A note is pinned to the front door in shaky handwriting: "Don\'t answer the knocking after midnight. — Gran"',
       title: 'Hollow Lane',
@@ -199,12 +202,12 @@ const hollowLane = TalePreset(
       'The cradle splinters. Every clock in the house starts ticking at once. Upstairs, the grandfather clock strikes midnight — though it is barely evening.',
       title: 'Cellar',
       sets: 'broken',
-      options: [TaleOption('Run upstairs', 'midnight')],
+      options: [TaleOption('Run upstairs', 'clock_wakes')],
     ),
     'bedroom': TaleNode(
       'You make the bed in your grandmother\'s room and lie down fully clothed. You do not remember falling asleep.\n\nYou wake to the clock striking midnight.',
       title: 'Bedroom',
-      options: [TaleOption('Listen', 'midnight')],
+      options: [TaleOption('Listen', 'clock_wakes')],
     ),
     'midnight': TaleNode(
       'Knock. Knock. Knock.\n\nFrom the front door, a voice you know: your mother\'s. "Sweetheart? It\'s cold out here. Let me in." Your mother has been dead for six years.',

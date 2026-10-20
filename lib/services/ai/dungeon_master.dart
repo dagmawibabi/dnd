@@ -4,6 +4,7 @@ import '../../data/srd.dart';
 import '../../game/story.dart';
 import '../../models/adventure.dart';
 import '../../models/character.dart';
+import '../../models/world.dart';
 import '../settings.dart';
 import 'gateway_client.dart';
 
@@ -71,16 +72,14 @@ Emit "map" when the hero enters a new region or dungeon, and "move" when they tr
 
 String dmStateBlock(Adventure a) => _stateBlock(a);
 
-String _stateBlock(Adventure a) {
+String _stateBlock(Adventure a, {String focus = ''}) {
   final b = StringBuffer();
   b.writeln('HERO: ${a.hero.promptSummary()}');
   for (final c in a.companions) {
     b.writeln('COMPANION: ${c.name} — level ${c.level} ${c.raceLabel} ${c.classSummary}, HP ${c.hp}/${c.maxHp}. Personality: ${c.personality}. Loyalty ${c.loyalty}/100 (${c.loyaltyLabel}).${c.personalQuest.isEmpty ? '' : ' Personal quest: ${c.personalQuest}.'}');
   }
   if (a.canon.isNotEmpty) {
-    final pinned = a.canon.where((c) => c.pinned).toList();
-    final rest = a.canon.where((c) => !c.pinned).toList()..sort((x, y) => y.turn.compareTo(x.turn));
-    final shown = [...pinned, ...rest.take((30 - pinned.length).clamp(0, 30))];
+    final shown = relevantCanon(a.canon, '$focus ${a.scene.title} ${recentFocus(a.log)}', max: 22);
     b.writeln('CANON (established facts, never contradict):');
     for (final c in shown) {
       b.writeln('- [${c.kind}] ${c.name}${c.text.isEmpty ? '' : ': ${c.text}'}');
@@ -109,22 +108,26 @@ class AiDungeonMaster {
 
   GatewayClient get _client => GatewayClient(apiKey: settings.apiKey);
 
+  /// Built for prompt caching: everything before the last message stays the
+  /// same from turn to turn (the setup, then the whole recent history, which
+  /// only changes when it is summarized). The changing state comes last.
   List<ChatMessage> _messages(Adventure a, String userTurn) {
     final msgs = <ChatMessage>[
-      ChatMessage('system', _dmSystemPrompt(a, settings)),
-      ChatMessage('user', 'ADVENTURE: "${a.title}" — ${a.premise}\n\n${_stateBlock(a)}'),
+      ChatMessage('system', _dmSystemPrompt(a, settings), cache: true),
+      ChatMessage('user', 'ADVENTURE: "${a.title}" — ${a.premise}\nSetting: ${a.setting}. Hero: ${a.hero.name}, ${a.hero.raceLabel} ${a.hero.classSummary}.'),
       const ChatMessage('assistant', '{"narration": "(Understood. I will run this adventure and reply only in the JSON format.)", "choices": []}'),
     ];
-    // recent history: stored as alternating "P:" / "D:" lines
-    final hist = a.aiHistory.length > 16 ? a.aiHistory.sublist(a.aiHistory.length - 16) : a.aiHistory;
-    for (final h in hist) {
+    // History is stored as alternating "P:" / "D:" lines and kept short by summaries.
+    for (final h in a.aiHistory) {
       if (h.startsWith('P:')) {
         msgs.add(ChatMessage('user', h.substring(2)));
       } else if (h.startsWith('D:')) {
         msgs.add(ChatMessage('assistant', h.substring(2)));
       }
     }
-    msgs.add(ChatMessage('user', '$userTurn\n\n(Current state)\n${_stateBlock(a)}\nRespond with the JSON object only.'));
+    final last = msgs.removeLast();
+    msgs.add(ChatMessage(last.role, last.content, cache: true));
+    msgs.add(ChatMessage('user', '$userTurn\n\n(Current state)\n${_stateBlock(a, focus: userTurn)}\nRespond with the JSON object only.'));
     return msgs;
   }
 

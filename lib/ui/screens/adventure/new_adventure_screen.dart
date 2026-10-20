@@ -18,6 +18,7 @@ import '../../../theme/ui.dart';
 import '../../widgets/ai_gate.dart';
 import '../../widgets/bright_art.dart';
 import '../../widgets/portrait.dart';
+import '../../widgets/import_adventure_button.dart';
 import '../character/character_creator.dart';
 import 'adventure_screen.dart';
 import 'text_adventure_screen.dart';
@@ -37,8 +38,9 @@ const _tones = ['Heroic', 'Dark', 'Whimsical', 'Mysterious', 'Epic', 'Comedic'];
 const _difficulties = ['Story', 'Normal', 'Hard', 'Deadly'];
 
 class NewAdventureScreen extends StatefulWidget {
-  const NewAdventureScreen({super.key, this.heroId});
+  const NewAdventureScreen({super.key, this.heroId, this.moduleId});
   final String? heroId;
+  final String? moduleId;
 
   @override
   State<NewAdventureScreen> createState() => _NewAdventureScreenState();
@@ -68,6 +70,10 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
     _heroId = widget.heroId ?? (store.characters.isNotEmpty ? store.characters.first.id : null);
     _engine = context.read<SettingsController>().useAiText ? StoryEngine.ai : StoryEngine.module;
     if (store.adventures.isNotEmpty) _moduleId = 'goblin_toll';
+    if (widget.moduleId != null && moduleById(widget.moduleId!) != null) {
+      _moduleId = widget.moduleId!;
+      _engine = StoryEngine.module;
+    }
   }
 
   @override
@@ -225,8 +231,8 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
     final store = context.watch<GameStore>();
     final settings = context.watch<SettingsController>();
     final hero = _hero;
-    return Scaffold(
-      appBar: AppBar(title: const Text('New adventure')),
+    return CompactChips(child: Scaffold(
+      appBar: AppBar(title: const Text('New adventure'), actions: const [ImportAdventureButton()]),
       body: ContentWidth(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
@@ -423,7 +429,7 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
           ),
         ),
       ),
-    );
+    ));
   }
 }
 

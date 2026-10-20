@@ -1,13 +1,15 @@
 import 'tale_format.dart';
+import 'extended_chapters.dart';
 
 const neonGhost = TalePreset(
   id: 'neon_ghost',
   title: 'Neon Ghost',
   genre: 'cyberpunk',
   blurb: 'Steal one data chip from the Kirin Tower. Easy money — until you learn whose memories are on it.',
-  minutes: 15,
+  minutes: 30,
   start: 'job',
   nodes: {
+    ...neonChapter,
     'job': TaleNode(
       'Rain sizzles on the neon of Low Kowloon. Your fixer, Mags, slides a holo across the noodle bar. "Kirin Corp, floor 88. One chip in a vault. Fifty thousand creds." Her eyes flick to your cheap implants. "You need the money. Don\'t ask what\'s on it."',
       title: 'Noodle Bar',
@@ -41,12 +43,12 @@ const neonGhost = TalePreset(
     'lobby': TaleNode(
       'Security bows to your borrowed face. The elevator hums up to 88 without a single question.',
       title: 'Lobby',
-      options: [TaleOption('Step out on floor 88', 'vault')],
+      options: [TaleOption('Take the elevator toward floor 88', 'floor_eighty_seven')],
     ),
     'dock': TaleNode(
       'Your deck chatters. The drones forget you exist. You ride a cargo lift up to the vault floor inside a crate marked FRAGILE.',
       title: 'Loading Dock',
-      options: [TaleOption('Climb out on floor 88', 'vault')],
+      options: [TaleOption('Climb out of the cargo lift', 'floor_eighty_seven')],
     ),
     'alarm': TaleNode(
       'Your hack bounces. Red lights. You sprint through the dock with drones on your heels and dive into a service lift, bleeding where a stun-dart grazed you.',
@@ -54,19 +56,19 @@ const neonGhost = TalePreset(
       damage: 25,
       status: 'Flagged',
       sets: 'flagged',
-      options: [TaleOption('Ride up to floor 88', 'vault')],
+      options: [TaleOption('Ride up toward floor 88', 'floor_eighty_seven')],
     ),
     'shaft': TaleNode(
       'Eighty-eight floors of greasy ladders. Your arms burn, but no camera sees you climb.',
       title: 'Maintenance Shaft',
       damage: 10,
-      options: [TaleOption('Pry open the vent on 88', 'vault')],
+      options: [TaleOption('Pry open the next vent', 'floor_eighty_seven')],
     ),
     'fall': TaleNode(
       'A rung snaps. You fall two floors before your grip catches. Something in your shoulder pops. You climb on, teeth clenched.',
       title: 'Maintenance Shaft',
       damage: 30,
-      options: [TaleOption('Keep climbing', 'vault')],
+      options: [TaleOption('Keep climbing', 'floor_eighty_seven')],
     ),
     'vault': TaleNode(
       'The vault is a white room with one glowing chip on a pedestal. When you touch it, a voice fills your head. "Please. My name is Ami. They\'re going to sell me as a personality for sex-bots and soldiers. Your client works for a rival. Nobody wants me free."',
@@ -76,6 +78,7 @@ const neonGhost = TalePreset(
         TaleOption('Deliver her to Mags for the money', 'deliver'),
         TaleOption('Upload her into the city net — set her free', 'upload', chance: 0.7, fail: 'trace'),
         TaleOption('Keep her chip in your own head', 'host'),
+        TaleOption('Show Ami the clean escape route', 'net_choice', requires: 'item:Clean route'),
       ],
     ),
     'deliver': TaleNode(
@@ -107,9 +110,10 @@ const lastWell = TalePreset(
   title: 'The Last Well',
   genre: 'postapoc',
   blurb: 'Your settlement has three days of water left. The only working well is in Raider territory.',
-  minutes: 15,
+  minutes: 30,
   start: 'camp',
   nodes: {
+    ...wellChapter,
     'camp': TaleNode(
       'The water barrels at Hope Station echo when you knock on them. Three days left. Old Teo points at the map. "The Deepwell. Forty miles west. The Red Teeth raiders hold it now. Bring water back or don\'t come back."',
       title: 'Hope Station',
@@ -139,29 +143,29 @@ const lastWell = TalePreset(
       title: 'The Tunnel',
       sets: 'kid',
       options: [
-        TaleOption('Take her with you', 'deepwell', sets: 'ally'),
-        TaleOption('Give her food and leave her safe', 'deepwell', requires: 'item:Canned peaches', takes: 'Canned peaches', sets: 'kind'),
-        TaleOption('Leave her', 'deepwell'),
+        TaleOption('Take her with you', 'dry_aqueduct', sets: 'ally'),
+        TaleOption('Give her food and leave her safe', 'dry_aqueduct', requires: 'item:Canned peaches', takes: 'Canned peaches', sets: 'kind'),
+        TaleOption('Leave her', 'dry_aqueduct'),
       ],
     ),
     'flats': TaleNode(
       'The mask hisses as you cross the green-glowing flats. Nothing alive moves here. You arrive at the Deepwell from the side nobody guards.',
       title: 'Toxic Flats',
       sets: 'sneak',
-      options: [TaleOption('Approach the Deepwell', 'deepwell')],
+      options: [TaleOption('Approach the Deepwell', 'dry_aqueduct')],
     ),
     'storm': TaleNode(
       'Sand screams against the windshield. You drive blind, by feel, and burst out of the storm a mile from the Deepwell.',
       title: 'Dust Storm',
       damage: 10,
-      options: [TaleOption('Approach the Deepwell', 'deepwell')],
+      options: [TaleOption('Approach the Deepwell', 'dry_aqueduct')],
     ),
     'crash': TaleNode(
       'You hit a buried car at forty miles an hour. The truck rolls. You crawl out bleeding and walk the last miles on foot.',
       title: 'Dust Storm',
       damage: 35,
       status: 'Injured',
-      options: [TaleOption('Limp to the Deepwell', 'deepwell')],
+      options: [TaleOption('Limp to the Deepwell', 'dry_aqueduct')],
     ),
     'deepwell': TaleNode(
       'The Deepwell is a fortress of scrap around an ancient pump. Chained workers haul buckets. On the tower, Mother Fang, leader of the Red Teeth, watches through a scope.',

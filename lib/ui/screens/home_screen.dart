@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../art/class_icon.dart';
+import '../../art/scene_painter.dart';
 import '../../data/presets.dart';
+import '../../data/modules.dart';
 import '../../game/module_engine.dart';
 import '../../models/adventure.dart';
 import '../../models/character.dart';
@@ -57,8 +59,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _dests = [
     (Icons.home_outlined, Icons.home, 'Home'),
-    (Icons.people_outline, Icons.people, 'Characters'),
-    (Icons.menu_book_outlined, Icons.menu_book, 'Compendium'),
+    (Icons.people_outline, Icons.people, 'Heroes'),
+    (Icons.auto_stories_outlined, Icons.auto_stories, 'Codex'),
     (Icons.casino_outlined, Icons.casino, 'Dice'),
     (Icons.settings_outlined, Icons.settings, 'Settings'),
   ];
@@ -96,7 +98,7 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Divider(),
+          const Divider(height: 1),
           NavigationBar(
             selectedIndex: _tab,
             onDestinationSelected: (i) => setState(() => _tab = i),
@@ -124,8 +126,7 @@ Future<void> openAdventure(BuildContext context, String id) async {
 }
 
 void startNewAdventure(BuildContext context) {
-  final store = context.read<GameStore>();
-  Navigator.of(context).push(MaterialPageRoute(builder: (_) => store.characters.isEmpty ? const CharacterCreator(thenStartAdventure: true) : const NewAdventureScreen()));
+  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NewAdventureScreen()));
 }
 
 /// Starts the guided tutorial with the first hero (or a preset).
@@ -182,14 +183,9 @@ class _HomeTab extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.only(bottom: 32),
           children: [
-            PageHeader(
-              title: settings.playerName.isEmpty ? greeting : '$greeting, ${settings.playerName}',
-              subtitle: switch (settings.aiMode) {
-                AiMode.both => 'AI story and images on',
-                AiMode.text => 'AI story on',
-                AiMode.images => 'AI images on',
-                AiMode.none => 'Offline mode',
-              },
+            _LibraryHeader(
+              tales: settings.homeMode == 'tales',
+              greeting: settings.playerName.isEmpty ? greeting : '$greeting, ${settings.playerName}',
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -319,10 +315,26 @@ class _HomeTab extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (store.adventures.isEmpty && store.characters.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 40),
-                        child: EmptyState(icon: Icons.auto_stories_outlined, title: 'No adventures yet', message: 'Create a character or pick a preset, then start your first adventure.'),
+                    const SectionLabel('Ready to play'),
+                    for (final module in adventureModules.where((m) => m.id != 'tutorial').take(3))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: AppCard(
+                          padding: EdgeInsets.zero,
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => NewAdventureScreen(moduleId: module.id))),
+                          child: Row(children: [
+                            SizedBox(width: 88, height: 112, child: SceneView(
+                              location: module.coverLoc, time: module.coverTime, seed: module.id.hashCode & 0xffff)),
+                            Expanded(child: Padding(padding: const EdgeInsets.all(14),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(module.title, style: T.h3()),
+                                const SizedBox(height: 6),
+                                Text(module.tagline, style: T.small(), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              ]))),
+                            const Padding(padding: EdgeInsets.only(right: 12), child: Icon(Icons.arrow_forward, size: 18)),
+                          ]),
+                        ),
                       ),
                   ],
                 ],
@@ -336,6 +348,33 @@ class _HomeTab extends StatelessWidget {
 }
 
 /// Switches the home screen between D&D and text adventures.
+class _LibraryHeader extends StatelessWidget {
+  const _LibraryHeader({required this.tales, required this.greeting});
+  final bool tales;
+  final String greeting;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 190,
+    child: Stack(fit: StackFit.expand, children: [
+      SceneView(location: tales ? 'town' : 'castle', time: tales ? 'night' : 'day', mood: 'calm', seed: tales ? 72 : 31),
+      const DecoratedBox(decoration: BoxDecoration(color: Color(0x55000000))),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(22, 24, 22, 24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.end, children: [
+          Text(greeting, style: T.small(color: Colors.white)),
+          const SizedBox(height: 8),
+          Text(tales ? 'Text adventures' : 'Dungeons & Dragons',
+            style: const TextStyle(fontFamily: 'serif', fontSize: 30, fontWeight: FontWeight.w700, color: Colors.white, height: 1.1, letterSpacing: 0)),
+          const SizedBox(height: 10),
+          Text(tales ? 'Mysteries to unravel. Worlds to change.' : 'Your hero. Your next chapter.',
+            style: T.small(color: Colors.white)),
+        ]),
+      ),
+    ]),
+  );
+}
+
 class _ModeSwitch extends StatelessWidget {
   const _ModeSwitch();
 

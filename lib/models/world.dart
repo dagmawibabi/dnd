@@ -202,6 +202,9 @@ mixin WorldData {
   /// The player's own notes.
   List<StoryNote> notes = [];
 
+  /// Seconds spent with this story open.
+  int playSeconds = 0;
+
   Bond bondFor(Npc person) => bonds.putIfAbsent(person.id, () => Bond(friendship: person.disposition.clamp(-100, 100)));
 
   List<ChatLine> chatWith(String personId) => chats.putIfAbsent(personId, () => []);
@@ -220,6 +223,7 @@ mixin WorldData {
         'voices': voices,
         'mediaCosts': mediaCosts,
         'playerNotes': notes.where((n) => !n.isEmpty).map((n) => n.toJson()).toList(),
+        'play': playSeconds,
       };
 
   void worldFromJson(Map<String, dynamic> j) {
@@ -232,6 +236,7 @@ mixin WorldData {
     voices = Map<String, String>.from(j['voices'] ?? const {});
     mediaCosts = {for (final e in (j['mediaCosts'] as Map? ?? const {}).entries) e.key as String: (e.value as num).toDouble()};
     notes = [for (final n in (j['playerNotes'] as List? ?? const [])) StoryNote.fromJson(Map<String, dynamic>.from(n))];
+    playSeconds = (j['play'] as num?)?.toInt() ?? 0;
   }
 
   /// Relationships for the AI, strongest first.
@@ -263,3 +268,35 @@ String? applyBondChange(WorldData w, Npc person, {int friendship = 0, int romanc
   b.moments.add(BondMoment(text: reason.isEmpty ? parts.join(', ') : reason, friendship: f, romance: r, turn: turn));
   return '${person.name}: ${parts.join(', ')}${reason.isEmpty ? '' : ' — $reason'}';
 }
+
+
+/// The memory worth sending this turn: pinned facts, facts about whatever was
+/// just mentioned, then the most recent — instead of everything ever recorded.
+List<CanonEntry> relevantCanon(List<CanonEntry> canon, String focus, {int max = 20}) {
+  final text = focus.toLowerCase();
+  bool mentioned(CanonEntry c) {
+    final name = c.name.toLowerCase().trim();
+    if (name.isEmpty) return false;
+    if (text.contains(name)) return true;
+    final first = name.split(RegExp(r'\s+')).first;
+    return first.length >= 4 && text.contains(first);
+  }
+
+  final out = <CanonEntry>[];
+  void add(Iterable<CanonEntry> xs) {
+    for (final c in xs) {
+      if (out.length >= max) return;
+      if (!out.contains(c)) out.add(c);
+    }
+  }
+
+  final recent = canon.toList()..sort((a, b) => b.turn.compareTo(a.turn));
+  add(canon.where((c) => c.pinned));
+  add(recent.where(mentioned));
+  add(recent);
+  return out;
+}
+
+/// The last few lines of a story, for deciding what memory is relevant.
+String recentFocus(List<LogEntry> log, {int entries = 8}) =>
+    log.reversed.take(entries).map((e) => '${e.speaker ?? ''} ${e.text}').join(' ');

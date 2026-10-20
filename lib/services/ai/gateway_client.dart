@@ -14,22 +14,45 @@ class GatewayException implements Exception {
 }
 
 class ChatMessage {
-  const ChatMessage(this.role, this.content);
+  const ChatMessage(this.role, this.content, {this.cache = false});
   final String role;
   final String content;
+
+  /// Marks the end of a stable prefix the provider may cache.
+  final bool cache;
   Map<String, dynamic> toJson() => {'role': role, 'content': content};
 }
 
+/// Providers on OpenRouter that need explicit cache markers (others cache automatically).
+bool _needsCacheMarkers(String model) {
+  final id = AiRoute.bare(model);
+  return id.startsWith('anthropic/') || id.startsWith('qwen/');
+}
+
+/// A model on an LM Studio server.
+class LmModel {
+  const LmModel({required this.id, this.loaded = false, this.context, this.maxContext});
+  final String id;
+  final bool loaded;
+
+  /// Context length it is loaded with (null when not loaded or unknown).
+  final int? context;
+  final int? maxContext;
+}
+
 /// Which service a model id is served by. OpenRouter ids carry an `or:` prefix
-/// so every model setting stays a single string.
-enum AiRouter { vercel, openRouter }
+/// and LM Studio (local) ids an `lm:` prefix, so every model setting stays a
+/// single string.
+enum AiRouter { vercel, openRouter, lmStudio }
 
 class AiRoute {
   static const prefix = 'or:';
-  static AiRouter of(String model) => model.startsWith(prefix) ? AiRouter.openRouter : AiRouter.vercel;
+  static const lmPrefix = 'lm:';
+  static AiRouter of(String model) => model.startsWith(prefix) ? AiRouter.openRouter : (model.startsWith(lmPrefix) ? AiRouter.lmStudio : AiRouter.vercel);
   static bool isOpenRouter(String model) => model.startsWith(prefix);
-  static String bare(String model) => isOpenRouter(model) ? model.substring(prefix.length) : model;
-  static String routerName(String model) => isOpenRouter(model) ? 'OpenRouter' : 'Vercel AI Gateway';
+  static bool isLmStudio(String model) => model.startsWith(lmPrefix);
+  static String bare(String model) => isOpenRouter(model) ? model.substring(prefix.length) : (isLmStudio(model) ? model.substring(lmPrefix.length) : model);
+  static String routerName(String model) => isOpenRouter(model) ? 'OpenRouter' : (isLmStudio(model) ? 'LM Studio' : 'Vercel AI Gateway');
 }
 
 /// One billed call, reported to [GatewayClient.onUsage].
@@ -46,8 +69,12 @@ class UsageEvent {
     this.category = 'story',
     this.target,
     this.reportedCost,
+    this.cachedTokens = 0,
   });
   final String model;
+
+  /// Input tokens served from the provider's prompt cache (billed at a discount).
+  final int cachedTokens;
   final String category;
   final Map<String, num>? target;
   final double? reportedCost;
@@ -96,6 +123,76 @@ class GatewayClient {
   /// OpenRouter key, kept in sync with Settings.
   static String openRouterKey = '';
 
+  /// LM Studio server address (e.g. http://192.168.1.20:1234), kept in sync with Settings.
+  static String lmStudioUrl = '';
+
+  /// "192.168.1.20:1234/v1/" → "http://192.168.1.20:1234".
+  static String normalizeLmUrl(String url) {
+    var u = url.trim();
+    if (u.isEmpty) return '';
+    if (!u.contains('://')) u = 'http://$u';
+    while (u.endsWith('/')) {
+      u = u.substring(0, u.length - 1);
+    }
+    if (u.endsWith('/v1')) u = u.substring(0, u.length - 3);
+    return u;
+  }
+
+  /// Fakes the LM Studio server in widget tests.
+  static http.Client? lmTestClient;
+
+  /// Model ids loaded or downloaded in LM Studio at [url] (without the `lm:` prefix).
+  static Future<List<String>> lmStudioModels(String url, {http.Client? client}) async => [for (final m in await lmStudioDetails(url, client: client)) m.id];
+
+  /// Models in LM Studio with whether they are loaded and their context size.
+  /// Uses LM Studio's own API when available, else the OpenAI-style list.
+  static Future<List<LmModel>> lmStudioDetails(String url, {http.Client? client}) async {
+    client ??= lmTestClient;
+    final base = normalizeLmUrl(url);
+    if (base.isEmpty) throw GatewayException('Enter your LM Studio server address.');
+    final c = client ?? http.Client();
+    try {
+      final rich = await c.get(Uri.parse('$base/api/v0/models')).timeout(const Duration(seconds: 8));
+      if (rich.statusCode == 200) {
+        final data = (jsonDecode(utf8.decode(rich.bodyBytes)) as Map)['data'];
+        return [
+          for (final m in (data is List ? data : const []))
+            if (m is Map && m['id'] is String && m['type'] != 'embeddings' && !(m['id'] as String).contains('embed'))
+              LmModel(id: m['id'], loaded: m['state'] == 'loaded', context: (m['loaded_context_length'] as num?)?.toInt(), maxContext: (m['max_context_length'] as num?)?.toInt()),
+        ];
+      }
+      final r = await c.get(Uri.parse('$base/v1/models')).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) throw GatewayException('LM Studio answered ${r.statusCode}. Is the server running?', status: r.statusCode);
+      final data = (jsonDecode(utf8.decode(r.bodyBytes)) as Map)['data'];
+      return [
+        for (final m in (data is List ? data : const []))
+          // Embedding models can't write stories.
+          if (m is Map && m['id'] is String && !(m['id'] as String).contains('embed')) LmModel(id: m['id']),
+      ];
+    } on GatewayException {
+      rethrow;
+    } catch (e) {
+      throw GatewayException('Couldn\'t reach LM Studio at $base. Check that the server is running, "Serve on Local Network" is on, and this device is on the same Wi-Fi.');
+    } finally {
+      if (client == null) c.close();
+    }
+  }
+
+  /// Whether LM Studio answers at [url] within a few seconds.
+  static Future<bool> lmStudioReachable(String url) async {
+    final base = normalizeLmUrl(url);
+    if (base.isEmpty) return false;
+    final c = lmTestClient ?? http.Client();
+    try {
+      final r = await c.get(Uri.parse('$base/v1/models')).timeout(const Duration(seconds: 4));
+      return r.statusCode == 200;
+    } catch (_) {
+      return false;
+    } finally {
+      if (lmTestClient == null) c.close();
+    }
+  }
+
   GatewayClient({required this.apiKey, http.Client? client, this.category = 'story', Map<String, num>? target, bool captureTarget = true, String? openRouterKey})
       : _http = client ?? http.Client(),
         _orKey = openRouterKey,
@@ -129,7 +226,10 @@ class GatewayClient {
     final input = (u['prompt_tokens'] ?? u['input_tokens'] ?? 0) as num;
     final output = (u['completion_tokens'] ?? u['output_tokens'] ?? 0) as num;
     if (input == 0 && output == 0 && images == 0 && videos == 0 && characters == 0) return;
+    final details = u['prompt_tokens_details'];
+    final cached = ((details is Map ? details['cached_tokens'] : null) ?? u['cache_read_input_tokens'] ?? 0) as num;
     final e = UsageEvent(
+      cachedTokens: cached.toInt(),
       model: model,
       inputTokens: input.toInt(),
       outputTokens: output.toInt(),
@@ -148,6 +248,10 @@ class GatewayClient {
   }
 
   String _keyFor(String model) {
+    if (AiRoute.isLmStudio(model)) {
+      if (normalizeLmUrl(lmStudioUrl).isEmpty) throw GatewayException('Add your LM Studio server address in Settings → AI providers to use ${AiRoute.bare(model)}.');
+      return 'lm-studio';
+    }
     if (AiRoute.isOpenRouter(model)) {
       final k = (_orKey ?? openRouterKey).trim();
       if (k.isEmpty) throw GatewayException('Add an OpenRouter key in Settings → AI providers to use ${AiRoute.bare(model)}.');
@@ -157,7 +261,36 @@ class GatewayClient {
     return apiKey.trim();
   }
 
-  String _chatBase(String model) => AiRoute.isOpenRouter(model) ? openRouterUrl : baseUrl;
+  String _chatBase(String model) => AiRoute.isOpenRouter(model) ? openRouterUrl : (AiRoute.isLmStudio(model) ? '${normalizeLmUrl(lmStudioUrl)}/v1' : baseUrl);
+
+  /// Local models can be slow, especially on the first call while they load.
+  Duration _wait(String model, int seconds) => Duration(seconds: AiRoute.isLmStudio(model) ? seconds * 3 : seconds);
+
+  List<Map<String, dynamic>> _messagesJson(String model, List<ChatMessage> messages) => [
+        for (final m in messages)
+          if (m.cache && AiRoute.isOpenRouter(model) && _needsCacheMarkers(model))
+            {
+              'role': m.role,
+              'content': [
+                {'type': 'text', 'text': m.content, 'cache_control': {'type': 'ephemeral'}},
+              ],
+            }
+          else
+            m.toJson(),
+      ];
+
+  /// Vercel adds cache markers itself when asked; OpenRouter uses ours.
+  /// LM Studio gets no caching hints, but thinking is switched off: small local
+  /// models otherwise spend the whole reply budget reasoning and return nothing.
+  Map<String, dynamic> _cacheOptions(String model) => AiRoute.isLmStudio(model)
+      ? const {'reasoning_effort': 'none'}
+      : AiRoute.isOpenRouter(model)
+      ? const {}
+      : const {
+          'providerOptions': {
+            'gateway': {'caching': 'auto'},
+          },
+        };
 
   Map<String, String> _headers(String model) => {
         'Authorization': 'Bearer ${_keyFor(model)}',
@@ -195,15 +328,17 @@ class GatewayClient {
 
   /// [multimodal] models draw through chat completions; others through
   /// `/images/generations` (Vercel) or image-only chat output (OpenRouter).
-  Future<Uint8List> generateImage({required String model, required String prompt, bool multimodal = true, String size = '1024x1024'}) async {
-    final release = beforeRequest?.call(model, utf8.encode(prompt).length + 32, multimodal ? 8192 : 0, 1, target);
+  /// [references] are images (PNG/JPEG bytes) of characters to keep consistent;
+  /// sent to chat image models that accept image input.
+  Future<Uint8List> generateImage({required String model, required String prompt, bool multimodal = true, String size = '1024x1024', List<Uint8List> references = const []}) async {
+    final release = beforeRequest?.call(model, utf8.encode(prompt).length + 32 + references.length * 1300, multimodal ? 8192 : 0, 1, target);
     try {
       try {
-        return await _generateImage(model: model, prompt: prompt, multimodal: multimodal, size: size);
+        return await _generateImage(model: model, prompt: prompt, multimodal: multimodal, size: size, references: references);
       } on _NoImage {
         // Chat image models occasionally answer in words; ask once more, firmly.
         try {
-          return await _generateImage(model: model, prompt: 'Generate the image now. Respond with the image only, no text.\n\n$prompt', multimodal: multimodal, size: size);
+          return await _generateImage(model: model, prompt: 'Generate the image now. Respond with the image only, no text.\n\n$prompt', multimodal: multimodal, size: size, references: references);
         } on _NoImage {
           throw GatewayException('The model returned no image twice. Try again, or pick another image model in Settings → Images.');
         }
@@ -238,13 +373,15 @@ class GatewayClient {
           headers: _headers(model),
           body: jsonEncode({
             'model': AiRoute.bare(model),
-            'messages': messages.map((m) => m.toJson()).toList(),
+            'messages': _messagesJson(model, messages),
             'temperature': temperature,
             'max_tokens': maxTokens,
-            if (json) 'response_format': {'type': 'json_object'},
+            // LM Studio only takes json_schema / text here.
+            if (json && !AiRoute.isLmStudio(model)) 'response_format': {'type': 'json_object'},
+            ..._cacheOptions(model),
           }),
         )
-        .timeout(const Duration(seconds: 120));
+        .timeout(_wait(model, 120));
     if (res.statusCode != 200) {
       // Some models reject response_format; retry once without it.
       if (json && res.statusCode == 400) {
@@ -287,19 +424,20 @@ class GatewayClient {
       ..headers.addAll(_headers(model))
       ..body = jsonEncode({
         'model': AiRoute.bare(model),
-        'messages': messages.map((m) => m.toJson()).toList(),
+        'messages': _messagesJson(model, messages),
         'temperature': temperature,
         'max_tokens': maxTokens,
         'stream': true,
         'stream_options': {'include_usage': true},
+        ..._cacheOptions(model),
       });
-    final res = await _http.send(req).timeout(const Duration(seconds: 60));
+    final res = await _http.send(req).timeout(_wait(model, 60));
     if (res.statusCode != 200) {
       final body = await res.stream.bytesToString();
       throw GatewayException(_errorText(body), status: res.statusCode);
     }
     var buffer = '';
-    await for (final chunk in res.stream.timeout(const Duration(seconds: 120)).transform(utf8.decoder)) {
+    await for (final chunk in res.stream.timeout(_wait(model, 120)).transform(utf8.decoder)) {
       buffer += chunk;
       while (true) {
         final nl = buffer.indexOf('\n');
@@ -331,9 +469,15 @@ class GatewayClient {
     return w > h ? (w / h > 1.6 ? '16:9' : '3:2') : (h / w > 1.6 ? '9:16' : '2:3');
   }
 
-  Future<Uint8List> _generateImage({required String model, required String prompt, bool multimodal = true, String size = '1024x1024'}) async {
+  Future<Uint8List> _generateImage({required String model, required String prompt, bool multimodal = true, String size = '1024x1024', List<Uint8List> references = const []}) async {
     final or = AiRoute.isOpenRouter(model);
     if (multimodal || or) {
+      final content = references.isEmpty
+          ? prompt
+          : [
+              {'type': 'text', 'text': prompt},
+              for (final r in references) {'type': 'image_url', 'image_url': {'url': 'data:${_imageMime(r)};base64,${base64Encode(r)}'}},
+            ];
       final res = await _http
           .post(
             Uri.parse('${_chatBase(model)}/chat/completions'),
@@ -341,7 +485,7 @@ class GatewayClient {
             body: jsonEncode({
               'model': AiRoute.bare(model),
               'messages': [
-                {'role': 'user', 'content': prompt},
+                {'role': 'user', 'content': content},
               ],
               'modalities': multimodal ? ['image', 'text'] : ['image'],
               if (or && size != '1024x1024') 'image_config': {'aspect_ratio': _aspect(size)},
@@ -351,6 +495,10 @@ class GatewayClient {
           .timeout(const Duration(seconds: 180));
       if (res.statusCode != 200) {
         final err = _errorText(utf8.decode(res.bodyBytes));
+        if (res.statusCode == 400 && references.isNotEmpty) {
+          // The model may not take image input; try again from the text alone.
+          return _generateImage(model: model, prompt: prompt, multimodal: multimodal, size: size);
+        }
         if (res.statusCode == 400 && multimodal && !or) {
           // Model may be image-only; fall back to the images endpoint.
           return _generateImage(model: model, prompt: prompt, multimodal: false, size: size);
@@ -451,6 +599,8 @@ class GatewayClient {
       release?.call();
     }
   }
+
+  static String _imageMime(Uint8List b) => b.length > 3 && b[0] == 0xFF && b[1] == 0xD8 ? 'image/jpeg' : (b.length > 4 && b[0] == 0x52 && b[1] == 0x49 ? 'image/webp' : 'image/png');
 
   static String sniffAudio(Uint8List b) {
     if (b.length > 4 && b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46) return 'audio/wav';

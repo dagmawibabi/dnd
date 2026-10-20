@@ -1,6 +1,7 @@
 import '../../game/story.dart';
 import '../../game/story_host.dart';
 import '../../models/adventure.dart';
+import '../../models/world.dart';
 import '../narrator.dart';
 import '../settings.dart';
 import 'gateway_client.dart';
@@ -56,6 +57,7 @@ class StoryAi {
     final all = host.world.chatWith(npc.id);
     final history = all.isNotEmpty && all.last.fromPlayer && all.last.text == line ? all.sublist(0, all.length - 1) : all;
     final past = history.length > 16 ? history.sublist(history.length - 16) : history;
+    if (AiRoute.isLmStudio(_fast)) return _localReply(host, npc, line, past);
     final transcript = [for (final l in past) '${l.fromPlayer ? host.playerName : npc.name}: ${l.text}'].join('\n');
     final system = '''
 You role-play ${npc.name}${npc.role.isEmpty ? '' : ', ${npc.role}'} in an interactive story. ${host.worldStyle}
@@ -81,6 +83,90 @@ Reply ONLY with JSON: {"reply": "what ${npc.name} says", "friendship_change": -1
       tokens: r.tokens,
       cost: r.cost,
     );
+  }
+
+  /// Small local models lose track of a long JSON prompt: they narrate the
+  /// player's actions instead of answering. So the conversation goes as real
+  /// chat turns, the reply is plain speech, and a second short call judges
+  /// how the relationship moved.
+  Future<CharacterReply> _localReply(StoryHost host, Npc npc, String line, List<ChatLine> past) async {
+    final me = npc.name;
+    final you = host.playerName;
+    final bond = host.world.bondFor(npc);
+    final system = '''
+You are $me${npc.role.isEmpty ? '' : ', ${npc.role}'}, talking face to face with $you. ${host.worldStyle}
+About you: ${npc.description.isEmpty ? 'keep a consistent personality that fits the story' : npc.description}${npc.notes.isEmpty ? '' : '\nYou remember: ${npc.notes}'}
+How you feel about $you: ${bond.describe(me)}.
+What has happened lately:
+${recentStory(host.log, entries: 6, maxChars: 1000)}
+
+Rules:
+- You ARE $me. Speak only as $me, in first person ("I").
+- Answer exactly what $you just said to you. If asked a question, answer it.
+- 1 to 3 sentences of natural speech. A short action in *asterisks* is fine.
+- Never describe what $you does or feels, and never write $you's lines.
+- No names before your line, no quotes around it, no JSON.
+$_rating''';
+    final msgs = [ChatMessage('system', system)];
+    void add(String role, String text) {
+      // Chat templates expect user and assistant turns to alternate.
+      if (msgs.length > 1 && msgs.last.role == role) {
+        msgs.add(ChatMessage(role, '${msgs.removeLast().content}\n$text'));
+      } else {
+        msgs.add(ChatMessage(role, text));
+      }
+    }
+
+    for (final l in past.length > 12 ? past.sublist(past.length - 12) : past) {
+      add(l.fromPlayer ? 'user' : 'assistant', l.text);
+    }
+    add('user', line);
+    final client = GatewayClient(apiKey: settings.apiKey, category: 'npc', target: host.usageTotals);
+    try {
+      final raw = await client.complete(model: _fast, temperature: settings.temperature.clamp(0.2, 0.75).toDouble(), maxTokens: 400, messages: msgs);
+      final text = cleanLocalReply(raw, me);
+      var friendship = 0, romance = 0;
+      try {
+        final judged = await client.complete(
+          model: _fast,
+          temperature: 0.2,
+          maxTokens: 60,
+          messages: [
+            ChatMessage('system', 'You judge relationships in a story. Given one exchange, say how it changes $me\'s feelings toward $you. Small changes: usually 0, 1 or 2; at most 5 either way. Romance moves only if $you flirts or shows romantic interest. Reply with JSON only, like {"friendship": 1, "romance": 0}'),
+            ChatMessage('user', '$you: $line\n$me: $text'),
+          ],
+        );
+        final j = extractJsonObject(judged);
+        int n(String k) => ((j?[k] ?? 0) is num ? (j?[k] ?? 0) as num : num.tryParse('${j?[k]}') ?? 0).toInt().clamp(-5, 5);
+        friendship = n('friendship');
+        romance = n('romance');
+      } catch (_) {
+        // The reply matters more than the score.
+      }
+      return CharacterReply(text: text, friendship: friendship, romance: romance, tokens: client.spentTokens, cost: client.spentCost);
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Strips what small models wrap around a line of speech: code fences,
+  /// a "Name:" prefix, quotes, or a stray JSON object.
+  static String cleanLocalReply(String raw, String name) {
+    var t = raw.trim().replaceAll(RegExp(r'^```[a-z]*\s*|\s*```$'), '').trim();
+    if (t.startsWith('{')) {
+      final j = extractJsonObject(t);
+      final r = j?['reply'] ?? j?['text'] ?? j?['speech'];
+      if (r != null) t = r.toString().trim();
+    }
+    for (final prefix in {name, name.split(' ').first}) {
+      final m = RegExp('^\\**${RegExp.escape(prefix)}\\**\\s*:\\s*\\**\\s*', caseSensitive: false).firstMatch(t);
+      if (m != null) {
+        t = t.substring(m.end);
+        break;
+      }
+    }
+    t = _unquote(t);
+    return t.isEmpty ? '…' : t;
   }
 
   static String _unquote(String text) {

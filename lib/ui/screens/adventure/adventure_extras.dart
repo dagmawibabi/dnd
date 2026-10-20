@@ -10,10 +10,37 @@ import '../../../services/usage.dart';
 import '../../../services/ai/gateway_client.dart';
 import '../../../game/story_host.dart';
 import '../../../theme/ui.dart';
-import 'sheets.dart';
 import '../story/story_tools.dart';
 
-/// Small app-bar pill with this adventure's spend. Only shown when enabled.
+/// Choice controls stay left while the story's usage stays right.
+class ChoiceToolbar extends StatelessWidget {
+  const ChoiceToolbar({super.key, required this.host, required this.collapsed, required this.onToggle, required this.hasChoices, this.trailing = const []});
+  final StoryHost host;
+
+  /// Extra right-aligned buttons beside the cost chip.
+  final List<Widget> trailing;
+  final bool collapsed;
+  final VoidCallback onToggle;
+  final bool hasChoices;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    Expanded(child: Align(alignment: Alignment.centerLeft, child: hasChoices
+      ? TextButton.icon(
+          onPressed: onToggle,
+          icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less, size: 18),
+          label: Text(collapsed ? 'Show choices' : 'Hide choices'),
+        )
+      : const SizedBox.shrink())),
+    Expanded(child: Align(alignment: Alignment.centerRight, child: FittedBox(fit: BoxFit.scaleDown,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        UsageChip(usage: host.usageTotals, title: host.storyTitle, turns: host.turns, storyId: host.storyId),
+        ...trailing,
+      ])))),
+  ]);
+}
+
+/// Story spend, shown only when enabled.
 class UsageChip extends StatelessWidget {
   const UsageChip({super.key, required this.usage, this.title, this.turns = 0, this.storyId});
   final Map<String, num> usage;
@@ -57,7 +84,7 @@ void showUsageSheet(BuildContext context, {Map<String, num>? story, String? titl
 
 void showStoryUsage(BuildContext context, StoryHost host) => showUsageSheet(context, story: host.usageTotals, title: host.storyTitle, turns: host.turns, highlight: host.storyId);
 
-class _UsageSheet extends StatelessWidget {
+class _UsageSheet extends StatefulWidget {
   const _UsageSheet({this.story, this.title, this.turns = 0, this.highlight});
   final Map<String, num>? story;
   final String? title;
@@ -65,14 +92,21 @@ class _UsageSheet extends StatelessWidget {
   final String? highlight;
 
   @override
+  State<_UsageSheet> createState() => _UsageSheetState();
+}
+
+class _UsageSheetState extends State<_UsageSheet> {
+  late bool _allTime = widget.story == null;
+
+  @override
   Widget build(BuildContext context) {
     final usage = context.watch<UsageTracker>();
     final settings = context.read<SettingsController>();
-    final a = story;
+    final a = widget.story;
     final days = usage.recentDays(14);
     final maxDay = days.fold<double>(0, (m, d) => d.$2.cost > m ? d.$2.cost : m);
     final models = usage.byModel.entries.toList()..sort((x, y) => y.value.cost.compareTo(x.value.cost));
-    final insights = usage.insights(story: a, turns: turns, textModel: settings.textModel, fastModel: settings.fastModel);
+    final insights = usage.insights(turns: widget.turns, textModel: settings.textModel, fastModel: settings.fastModel);
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.85,
       child: ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 32), children: [
@@ -82,7 +116,15 @@ class _UsageSheet extends StatelessWidget {
           child: Text('Estimated from token counts and published prices (OpenRouter reports exact costs). Your provider dashboard has the exact bill.', style: T.small()),
         ),
         if (a != null) ...[
-          SectionLabel(title == null ? 'This story' : 'This story · $title', padding: const EdgeInsets.fromLTRB(4, 0, 4, 8)),
+          DefaultTabController(length: 2, initialIndex: _allTime ? 1 : 0, child: TabBar(
+            tabAlignment: TabAlignment.fill,
+            tabs: const [Tab(text: 'Current story'), Tab(text: 'All time')],
+            onTap: (index) => setState(() => _allTime = index == 1),
+          )),
+          const SizedBox(height: 16),
+        ],
+        if (a != null && !_allTime) ...[
+          SectionLabel(widget.title ?? 'Current story', padding: const EdgeInsets.fromLTRB(4, 0, 4, 8)),
           Row(children: [
             Expanded(child: StatTile(label: 'Spend', value: fmtCost((a['cost'] ?? 0).toDouble()))),
             const SizedBox(width: 8),
@@ -91,7 +133,12 @@ class _UsageSheet extends StatelessWidget {
             Expanded(child: StatTile(label: 'Media', value: '${(a['images'] ?? 0).toInt()} img · ${(a['videos'] ?? 0).toInt()} vid')),
           ]),
         ],
-        if (a != null) UsageBreakdown(values: a),
+        if (a != null && !_allTime) ...[
+          UsageBreakdown(values: a),
+          if (widget.turns > 0)
+            Padding(padding: const EdgeInsets.all(4), child: Text('${widget.turns} turns · ${fmtCost((a['cost'] ?? 0) / widget.turns)} per turn', style: T.small())),
+        ],
+        if (_allTime) ...[
         const SectionLabel('All time'),
         Row(children: [
           Expanded(child: StatTile(label: 'Spend', value: fmtCost(usage.total.cost))),
@@ -155,7 +202,7 @@ class _UsageSheet extends StatelessWidget {
             ),
           ),
         const SectionLabel('By adventure'),
-        AdventureUsageList(highlight: highlight),
+        AdventureUsageList(highlight: widget.highlight),
         if (models.isNotEmpty) ...[
           const SectionLabel('By model'),
           RowGroup(children: [
@@ -177,6 +224,7 @@ class _UsageSheet extends StatelessWidget {
             }
           },
         ),
+        ],
       ]),
     );
   }
@@ -187,30 +235,6 @@ List<Widget> adventureMenuRows(BuildContext context, BuildContext sheetContext, 
   final a = ctl.adventure;
   return [
     ...storyMenuRows(context, sheetContext, ctl),
-    const SizedBox(height: 12),
-    RowGroup(children: [
-      ListRow(
-        leading: const Icon(Icons.help_outline, size: 20),
-        title: 'Ask the oracle',
-        subtitle: 'Yes/no questions to fate · chaos ${a.chaos}',
-        onTap: () {
-          Navigator.pop(sheetContext);
-          showOracleSheet(context, ctl);
-        },
-      ),
-      ListRow(
-        leading: const Icon(Icons.undo, size: 20),
-        title: 'Rewind last turn',
-        subtitle: a.hardcore ? 'Not available in hardcore mode' : (ctl.canRewind ? 'Undo your last choice' : 'Nothing to rewind'),
-        onTap: ctl.canRewind
-            ? () {
-                Navigator.pop(sheetContext);
-                ctl.rewind();
-                showToast(context, 'Rewound to before your last action', icon: Icons.undo);
-              }
-            : null,
-      ),
-    ]),
     const SizedBox(height: 12),
     Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),

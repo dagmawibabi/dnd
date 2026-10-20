@@ -12,6 +12,7 @@ import 'services/game_store.dart';
 import 'services/tale_store.dart';
 import 'services/image_service.dart';
 import 'services/achievements.dart';
+import 'services/codex_art.dart';
 import 'services/narrator.dart';
 import 'services/usage.dart';
 import 'services/settings.dart';
@@ -47,6 +48,7 @@ Future<void> _start() async {
     final audio = AudioService(settings);
     final usage = UsageTracker(prefs, catalog, settings: settings);
     final narrator = Narrator(settings, catalog: catalog);
+    final codexArt = CodexArt(prefs);
     final achievements = Achievements(prefs)..onUnlock = (a) => showAchievementToast(rootMessenger.currentState, a);
     runApp(
       MultiProvider(
@@ -60,6 +62,7 @@ Future<void> _start() async {
           ChangeNotifierProvider.value(value: usage),
           ChangeNotifierProvider.value(value: narrator),
           ChangeNotifierProvider.value(value: achievements),
+          ChangeNotifierProvider.value(value: codexArt),
         ],
         child: const DndApp(),
       ),

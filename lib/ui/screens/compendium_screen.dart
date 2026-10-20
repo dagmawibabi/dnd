@@ -1,14 +1,21 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../services/ai/model_catalog.dart';
+import '../../services/codex_art.dart';
+import '../../services/image_service.dart';
+import '../../services/settings.dart';
+import '../../services/usage.dart' show fmtCost;
+import '../widgets/media_view.dart' show openMedia;
 
 import '../../art/render_png.dart';
-import '../widgets/media_view.dart' show mediaActions;
 
 import '../../art/class_icon.dart';
 import '../../art/monster_painter.dart';
 import '../../data/srd.dart';
 import '../../models/character.dart';
 import '../../theme/ui.dart';
-import '../widgets/image_viewer.dart';
 import '../widgets/portrait.dart';
 
 const _rules = [
@@ -42,12 +49,102 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
     super.dispose();
   }
 
+  /// A list thumbnail: AI art when painted, otherwise the drawn version.
+  Widget _thumb(String kind, String id, Widget drawn) {
+    final path = context.watch<CodexArt?>()?.pathOf(kind, id);
+    if (path == null) return drawn;
+    return ClipRRect(borderRadius: BorderRadius.circular(10), child: SizedBox.square(dimension: 40, child: GeneratedImage(path: path, fallback: drawn, service: context.read<ImageService>(), cacheWidth: 120)));
+  }
+
+  /// The art at the top of a detail sheet: tap to view full screen, save or share.
+  Widget _hero(String kind, String id, String name, Widget drawn, Future<Uint8List?> Function()? render) {
+    final path = context.read<CodexArt?>()?.pathOf(kind, id);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: GestureDetector(
+        onTap: () => openMedia(context, path: path, fallback: Center(child: FittedBox(child: drawn)), title: name, subtitle: path == null ? 'Drawn on device' : 'AI art', aspectRatio: 1, render: render),
+        child: Center(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: SizedBox.square(
+              dimension: 160,
+              child: path == null
+                  ? Container(color: AppColors.surface2, child: Center(child: drawn))
+                  : GeneratedImage(path: path, fallback: Center(child: drawn), service: context.read<ImageService>()),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _artButton() {
+    final art = context.watch<CodexArt?>();
+    if (art == null) return const SizedBox.shrink();
+    if (art.running) {
+      return IconButton(
+        tooltip: 'Stop painting',
+        onPressed: art.cancel,
+        icon: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, value: art.total == 0 ? null : art.done / art.total)),
+      );
+    }
+    return IconButton(tooltip: 'Remake art with AI', icon: const Icon(Icons.auto_awesome_outlined), onPressed: _confirmArt);
+  }
+
+  Widget _progress() {
+    final art = context.watch<CodexArt>();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Row(children: [
+        Expanded(child: LinearProgressIndicator(value: art.total == 0 ? null : art.done / art.total, minHeight: 4, borderRadius: BorderRadius.circular(4))),
+        const SizedBox(width: 10),
+        Text('Painting ${art.done}/${art.total}', style: T.caption()),
+        TextButton(onPressed: art.cancel, child: const Text('Stop')),
+      ]),
+    );
+  }
+
+  Future<void> _confirmArt() async {
+    final settings = context.read<SettingsController>();
+    final art = context.read<CodexArt>();
+    if (!settings.useAiImages) {
+      showToast(context, 'Turn on AI images in Settings → Images first.', icon: Icons.image_not_supported_outlined);
+      return;
+    }
+    final total = codexSubjects().length;
+    final missing = art.missing();
+    final price = context.read<ModelCatalog>().byId(settings.imageModel)?.imagePrice;
+    String est(int n) => price == null ? '' : ' (about ${fmtCost(price * n)})';
+    final choice = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paint the codex with AI?'),
+        content: Text(
+          'This creates AI art for races, classes and monsters with ${settings.imageModel.replaceFirst('or:', '')}.\n\n'
+          '${missing == 0 ? 'Everything already has art.' : '$missing of $total still use drawn art.'}\n\n'
+          'Pictures are made one at a time; you can stop any time.',
+          style: T.body(),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: T.h3(color: AppColors.textMuted))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Remake all $total${est(total)}')),
+          if (missing > 0) FilledButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Paint $missing${est(missing)}')),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await art.paint(context.read<ImageService>(), missingOnly: !choice);
+    if (!mounted) return;
+    showToast(context, art.error != null ? 'Stopped: ${art.error}' : 'Codex art ready', icon: art.error != null ? Icons.error_outline : Icons.auto_awesome);
+  }
+
   bool _match(String s) => _q.isEmpty || s.toLowerCase().contains(_q.toLowerCase());
 
   @override
   Widget build(BuildContext context) {
     final body = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      if (widget.embedded) const ContentWidth(child: PageHeader(title: 'Compendium', subtitle: 'Rules, spells, gear and monsters')),
+      if (widget.embedded) ContentWidth(child: PageHeader(title: 'Codex', subtitle: 'Rules, spells, gear and monsters', trailing: _artButton())),
+      if (context.watch<CodexArt?>()?.running ?? false) ContentWidth(child: _progress()),
       ContentWidth(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -70,7 +167,7 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
           _list([
             for (final r in races.where((r) => _match(r.name)))
               ListRow(
-                leading: PortraitView(spec: PortraitSpec.random(r.id, seed: 1000 + r.id.length * 13), raceId: r.id, size: 40),
+                leading: _thumb('race', r.id, PortraitView(spec: PortraitSpec.random(r.id, seed: 1000 + r.id.length * 13), raceId: r.id, size: 40)),
                 title: r.name,
                 subtitle: '${r.size} · ${r.speed} ft${r.subraces.isEmpty ? '' : ' · ${r.subraces.length} subraces'}',
                 onTap: () => _raceSheet(r),
@@ -78,7 +175,7 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
           ]),
           _list([
             for (final c in classes.where((c) => _match(c.name)))
-              ListRow(leading: ClassIcon(classId: c.id, size: 40), title: c.name, subtitle: 'd${c.hitDie} · ${c.primary.full}${c.caster != CasterType.none ? ' · spellcaster' : ''}', onTap: () => _classSheet(c)),
+              ListRow(leading: _thumb('class', c.id, ClassIcon(classId: c.id, size: 40)), title: c.name, subtitle: 'd${c.hitDie} · ${c.primary.full}${c.caster != CasterType.none ? ' · spellcaster' : ''}', onTap: () => _classSheet(c)),
           ]),
           _list([
             for (final lvl in [0, 1, 2, 3])
@@ -115,7 +212,7 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
           _list([
             for (final m in (monsters.where((m) => _match(m.name)).toList()..sort((a, b) => a.cr.compareTo(b.cr))))
               ListRow(
-                leading: SizedBox(width: 40, height: 40, child: CustomPaint(painter: MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode))),
+                leading: _thumb('monster', m.id, SizedBox(width: 40, height: 40, child: CustomPaint(painter: MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode)))),
                 title: m.name,
                 subtitle: 'CR ${_cr(m.cr)} · ${m.type} · ${m.hp} HP · AC ${m.ac}',
                 onTap: () => _monsterSheet(m),
@@ -131,7 +228,7 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
       ),
     ]);
     if (widget.embedded) return SafeArea(child: body);
-    return Scaffold(appBar: AppBar(title: const Text('Compendium')), body: body);
+    return Scaffold(appBar: AppBar(title: const Text('Codex'), actions: [_artButton(), const SizedBox(width: 8)]), body: body);
   }
 
   Widget _list(List<Widget> children) => ContentWidth(
@@ -155,6 +252,8 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
   }
 
   void _raceSheet(RaceDef r) => _sheet(r.name, '${r.size} · speed ${r.speed} ft${r.darkvision ? ' · darkvision' : ''}', [
+        _hero('race', r.id, r.name, PortraitView(spec: PortraitSpec.random(r.id, seed: 1000 + r.id.length * 13), raceId: r.id, size: 120),
+            () => portraitPng(PortraitSpec.random(r.id, seed: 1000 + r.id.length * 13), r.id)),
         Text(r.description, style: T.body()),
         const SectionLabel('Traits'),
         for (final t in r.traits) Padding(padding: const EdgeInsets.only(bottom: 6), child: Text('• $t', style: T.small(color: AppColors.text))),
@@ -167,6 +266,7 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
       ]);
 
   void _classSheet(ClassDef c) => _sheet(c.name, c.epithet, [
+        _hero('class', c.id, c.name, ClassIcon(classId: c.id, size: 96), null),
         Text(c.description, style: T.body()),
         const SizedBox(height: 12),
         Wrap(spacing: 6, runSpacing: 6, children: [
@@ -202,16 +302,8 @@ class _CompendiumScreenState extends State<CompendiumScreen> with SingleTickerPr
       ]);
 
   void _monsterSheet(MonsterDef m) => _sheet(m.name, 'CR ${_cr(m.cr)} ${m.type} · ${m.xp} XP', [
-        GestureDetector(
-          onTap: () => openImageViewer(
-            context,
-            title: m.name,
-            subtitle: m.type,
-            actions: mediaActions(context, null, name: m.name, render: () => paintPng(const Size.square(1024), (c, s) => MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode).paint(c, s))),
-            builder: (_) => CustomPaint(painter: MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode)),
-          ),
-          child: Center(child: SizedBox(width: 96, height: 96, child: CustomPaint(painter: MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode)))),
-        ),
+        _hero('monster', m.id, m.name, SizedBox(width: 120, height: 120, child: CustomPaint(painter: MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode))),
+            () => paintPng(const Size.square(1024), (c, s) => MonsterPainter(type: m.type, color: m.color, seed: m.id.hashCode).paint(c, s))),
         const SizedBox(height: 16),
         Row(children: [
           Expanded(child: StatTile(label: 'Armor class', value: '${m.ac}')),

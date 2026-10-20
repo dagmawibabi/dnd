@@ -43,6 +43,7 @@ class _ModelPickerScreenState extends State<ModelPickerScreen> {
     // Start on the router you have a key for.
     if (s.hasOpenRouterKey && !s.hasVercelKey) _router = AiRouter.openRouter;
     if (s.hasVercelKey && !s.hasOpenRouterKey) _router = AiRouter.vercel;
+    if (AiRoute.isLmStudio(widget.current) || (s.hasLmStudio && !s.hasVercelKey && !s.hasOpenRouterKey)) _router = AiRouter.lmStudio;
     WidgetsBinding.instance.addPostFrameCallback((_) => context.read<ModelCatalog>().ensureLoaded());
   }
 
@@ -55,7 +56,7 @@ class _ModelPickerScreenState extends State<ModelPickerScreen> {
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           TextField(controller: ctrl, autofocus: true, style: T.body(), decoration: const InputDecoration(hintText: 'provider/model or or:provider/model')),
           const SizedBox(height: 8),
-          Text('Prefix with "or:" to use OpenRouter.', style: T.caption()),
+          Text('Prefix with "or:" to use OpenRouter, or "lm:" for an LM Studio model.', style: T.caption()),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: T.h3(color: AppColors.textMuted))),
@@ -101,7 +102,8 @@ class _ModelPickerScreenState extends State<ModelPickerScreen> {
       case _Sort.name:
         list.sort((a, b) => a.name.compareTo(b.name));
     }
-    final missingKey = _router != null && !(_router == AiRouter.openRouter ? settings.hasOpenRouterKey : settings.hasVercelKey);
+    final missingKey = _router != null && !switch (_router!) { AiRouter.openRouter => settings.hasOpenRouterKey, AiRouter.lmStudio => settings.hasLmStudio, AiRouter.vercel => settings.hasVercelKey };
+    final showLocal = _kind == ModelKind.text && (settings.hasLmStudio || counts[AiRouter.lmStudio]! > 0);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
@@ -121,9 +123,10 @@ class _ModelPickerScreenState extends State<ModelPickerScreen> {
             child: SegmentedButton<AiRouter?>(
               showSelectedIcon: false,
               segments: [
-                ButtonSegment(value: null, label: Text('All · ${all.length}')),
-                ButtonSegment(value: AiRouter.vercel, label: Text('Vercel · ${counts[AiRouter.vercel]}', maxLines: 1)),
-                ButtonSegment(value: AiRouter.openRouter, label: Text('OpenRouter · ${counts[AiRouter.openRouter]}', maxLines: 1)),
+                ButtonSegment(value: null, label: Text(showLocal ? 'All' : 'All · ${all.length}', maxLines: 1)),
+                ButtonSegment(value: AiRouter.vercel, label: Text(showLocal ? 'Vercel' : 'Vercel · ${counts[AiRouter.vercel]}', maxLines: 1)),
+                ButtonSegment(value: AiRouter.openRouter, label: Text(showLocal ? 'OpenRouter' : 'OpenRouter · ${counts[AiRouter.openRouter]}', maxLines: 1, overflow: TextOverflow.fade, softWrap: false)),
+                if (showLocal) ButtonSegment(value: AiRouter.lmStudio, label: Text('Local · ${counts[AiRouter.lmStudio]}', maxLines: 1)),
               ],
               selected: {_router},
               onSelectionChanged: (v) => setState(() {
@@ -159,8 +162,10 @@ class _ModelPickerScreenState extends State<ModelPickerScreen> {
           if (missingKey)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Text('Add your ${_router == AiRouter.openRouter ? 'OpenRouter' : 'Vercel AI Gateway'} key in Settings → AI providers to use these models.', style: T.small(color: AppColors.warning)),
+              child: Text(_router == AiRouter.lmStudio ? 'Connect LM Studio in Settings → AI providers to use local models.' : 'Add your ${_router == AiRouter.openRouter ? 'OpenRouter' : 'Vercel AI Gateway'} key in Settings → AI providers to use these models.', style: T.small(color: AppColors.warning)),
             ),
+          if (_router == AiRouter.lmStudio && cat.localError != null)
+            Padding(padding: const EdgeInsets.fromLTRB(16, 10, 16, 0), child: Text(cat.localError!, style: T.small(color: AppColors.danger))),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
             child: Row(children: [
@@ -210,6 +215,7 @@ class _ModelTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final m = model;
     final or = m.router == AiRouter.openRouter;
+    final local = m.router == AiRouter.lmStudio;
     return SelectCard(
       selected: selected,
       onTap: onTap,
@@ -221,7 +227,7 @@ class _ModelTile extends StatelessWidget {
           Text(m.bareId, style: T.caption()),
           const SizedBox(height: 10),
           Wrap(spacing: 6, runSpacing: 6, children: [
-            Tag(or ? 'OpenRouter' : 'Vercel', color: or ? const Color(0xFF60A5FA) : AppColors.textMuted),
+            Tag(local ? 'LM Studio' : (or ? 'OpenRouter' : 'Vercel'), color: local ? AppColors.success : (or ? const Color(0xFF60A5FA) : AppColors.textMuted)),
             if (m.isFree) const Tag('Free', icon: Icons.money_off, color: AppColors.success, filled: true) else Tag(kind == ModelKind.text && !m.canMakeImages ? '${m.priceLabel} / 1M' : m.priceLabel, icon: Icons.payments_outlined),
             if (m.contextWindow != null && kind == ModelKind.text) Tag('${m.contextLabel} context'),
             if (m.reasoning && kind == ModelKind.text) const Tag('Reasoning', color: AppColors.accent, filled: true),

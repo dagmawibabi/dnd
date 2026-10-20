@@ -6,6 +6,16 @@ import 'package:provider/provider.dart';
 
 import '../../../art/scene_painter.dart';
 import '../../../game/story_host.dart';
+import '../../../game/adventure_controller.dart';
+import '../../../game/tale_controller.dart';
+import '../../../game/module_engine.dart';
+import '../../../models/tale.dart';
+import '../../../models/character.dart' show Character;
+import '../../../services/game_store.dart';
+import '../adventure/adventure_screen.dart';
+import '../adventure/text_adventure_screen.dart';
+import '../tales/tales_hub.dart' show taleRoute;
+import '../tales/tale_tools.dart' show restartTale;
 import '../../../models/adventure.dart';
 import '../../../models/character.dart' show newId;
 import '../../../models/world.dart';
@@ -791,6 +801,81 @@ class _GalleryTabState extends State<GalleryTab> {
 
 // --------------------------------------------------------------- AI tools
 
+/// Layout switch and start over, shared by every story's tools sheet.
+List<Widget> storyLayoutRows(BuildContext context, BuildContext sheet, StoryHost host) => [
+      RowGroup(children: [
+        ListRow(
+          leading: const Icon(Icons.terminal, size: 20),
+          title: 'Terminal layout',
+          subtitle: 'Classic monospace text with a prompt',
+          trailing: Switch(
+            value: host.record is Tale ? (host.record as Tale).terminal : (host.record as Adventure).textMode,
+            onChanged: host.busy
+                ? null
+                : (v) {
+                    Navigator.pop(sheet);
+                    _changeStoryLayout(context, host, v);
+                  },
+          ),
+        ),
+        ListRow(
+          leading: const Icon(Icons.replay, size: 20),
+          title: 'Start over',
+          subtitle: host.record is Tale ? 'A fresh copy; this story is kept' : 'Restart with your current party; this save is kept',
+          onTap: host.busy
+              ? null
+              : () {
+                  Navigator.pop(sheet);
+                  _restartStory(context, host);
+                },
+        ),
+      ]),
+    ];
+
+Future<void> _changeStoryLayout(BuildContext context, StoryHost host, bool terminal) async {
+  if (host is TaleController) {
+    host.tale.terminal = terminal;
+    await host.flush();
+    if (context.mounted) Navigator.of(context).pushReplacement(taleRoute(host.tale));
+  } else if (host is AdventureController) {
+    host.adventure.textMode = terminal;
+    await host.flush();
+    if (context.mounted) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => terminal
+        ? TextAdventureScreen(adventure: host.adventure) : AdventureScreen(adventure: host.adventure)));
+    }
+  }
+}
+
+Future<void> _restartStory(BuildContext context, StoryHost host) async {
+  if (host is TaleController) {
+    await host.flush();
+    if (!context.mounted) return;
+    final fresh = await restartTale(context, host.tale);
+    if (context.mounted) Navigator.of(context).pushReplacement(taleRoute(fresh));
+  } else if (host is AdventureController) {
+    await host.flush();
+    if (!context.mounted) return;
+    final old = host.adventure;
+    Character freshHero(Character hero) => Character.fromJson({...hero.toJson(), 'id': newId()})
+      ..dead = false
+      ..longRest();
+    final fresh = Adventure(
+      id: newId(), title: old.title, premise: old.premise,
+      hero: freshHero(old.hero), companions: old.companions.map(freshHero).toList(),
+      engine: old.engine, setting: old.setting, tone: old.tone, difficulty: old.difficulty,
+      textMode: old.textMode, coverSeed: old.coverSeed, chaos: old.chaos,
+      hardcore: old.hardcore, showDcs: old.showDcs,
+      offline: old.engine == StoryEngine.module ? ModuleEngine.createState(old.offline['module'] as String) : null,
+    );
+    await context.read<GameStore>().saveAdventure(fresh, syncHero: false);
+    if (context.mounted) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => fresh.textMode
+        ? TextAdventureScreen(adventure: fresh) : AdventureScreen(adventure: fresh)));
+    }
+  }
+}
+
 /// Recap, lore questions, ideas and a diary entry.
 Future<void> showAiTools(BuildContext context, StoryHost host) {
   return showAppSheet(context, builder: (ctx) => _AiTools(host: host, outer: context));
@@ -992,10 +1077,8 @@ List<Widget> storyMenuRows(BuildContext context, BuildContext sheetContext, Stor
 
   return [
     RowGroup(children: [
-      ListRow(leading: const Icon(Icons.psychology_outlined, size: 20), title: 'AI tools', subtitle: 'Recap, ideas, lore questions, diary', onTap: () => go(() => showAiTools(context, host))),
       ListRow(leading: const Icon(Icons.forum_outlined, size: 20), title: 'People & relationships', subtitle: '${host.people.length} met · talk to anyone', onTap: () => go(() => showStoryJournal(context, host, initial: 'People'))),
       ListRow(leading: const Icon(Icons.photo_library_outlined, size: 20), title: 'Gallery', subtitle: 'Art, portraits and maps · save any to your phone', onTap: () => go(() => showStoryJournal(context, host, initial: 'Gallery'))),
-      ListRow(leading: const Icon(Icons.sticky_note_2_outlined, size: 20), title: 'Notes', subtitle: '${host.world.notes.where((n) => !n.isEmpty).length} notes · your own notebook', onTap: () => go(() => openNotes(context, host))),
       ListRow(leading: const Icon(Icons.psychology_alt_outlined, size: 20), title: 'Memory', subtitle: '${host.canon.length} facts remembered', onTap: () => go(() => showStoryJournal(context, host, initial: 'Memory'))),
       ListRow(leading: const Icon(Icons.text_fields, size: 20), title: 'Text & font', subtitle: '${_fontLabels[settings.readingFont] ?? 'Serif'} · ${(settings.readingScale * 100).round()}%', onTap: () => go(() => showTextStyleSheet(context))),
       ListRow(leading: const Icon(Icons.ios_share, size: 20), title: 'Export', subtitle: 'PDF, web page, Markdown or text', onTap: () => go(() => showStoryExport(context, host))),
@@ -1086,6 +1169,7 @@ class _AiControlsState extends State<_AiControls> {
           sw(Icons.auto_stories_outlined, 'AI storyteller', s.aiText, key ? (v) => s.update((s) => s.aiText = v) : null, sub: key ? null : 'Add a key in Settings first'),
           sw(Icons.forum_outlined, 'Character chats', s.aiNpcChat, (v) => s.update((s) => s.aiNpcChat = v)),
           sw(Icons.history_edu_outlined, 'Recaps when you return', s.aiRecaps, (v) => s.update((s) => s.aiRecaps = v)),
+          sw(Icons.sports_kabaddi_outlined, 'Narrate combat', s.aiCombatNarration, (v) => s.update((s) => s.aiCombatNarration = v)),
           sw(Icons.image_outlined, 'AI images', s.imageMode == ImageMode.ai, key ? (v) => s.update((s) => s.imageMode = v ? ImageMode.ai : ImageMode.procedural) : null),
           sw(Icons.autorenew, 'Paint automatically', s.aiAutoImages, (v) => s.update((s) => s.aiAutoImages = v)),
           sw(Icons.landscape_outlined, 'Scene art', s.aiScenes, (v) => s.update((s) => s.aiScenes = v)),

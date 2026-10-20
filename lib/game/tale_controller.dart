@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -105,6 +106,56 @@ class TaleController extends ChangeNotifier implements StoryHost {
 
   @override
   Future<void> act(String text) => freeText(text);
+
+  @override
+  Future<void> illustrate(String text, {bool video = false}) {
+    images?.resume();
+    final short = text.length > 400 ? '${text.substring(0, 400)}…' : text;
+    return effect('moment', short, force: true, video: video);
+  }
+
+  /// The story before the last AI turn, for regenerating it.
+  String? _snapshot;
+  int _snapshotLog = 0;
+
+  void _takeSnapshot() {
+    _snapshot = jsonEncode(tale.toJson());
+    _snapshotLog = tale.log.length;
+  }
+
+  @override
+  bool get canRegenerate => isAi && _snapshot != null && !busy && !tale.finished && tale.log.length > _snapshotLog;
+
+  @override
+  Future<void> regenerate() async {
+    if (!canRegenerate) return;
+    final action = tale.log[_snapshotLog];
+    final restored = Tale.fromJson(jsonDecode(_snapshot!) as Map<String, dynamic>);
+    tale.restoreFrom(restored);
+    _snapshot = null;
+    error = null;
+    narrator?.stop();
+    _notify();
+    if (action.kind == LogKind.player) {
+      await freeText(action.text);
+    } else {
+      await retry();
+    }
+  }
+
+  DateTime _clock = DateTime.now();
+
+  /// Adds the time since the last save to this story's play time.
+  void _bankTime() {
+    final now = DateTime.now();
+    final secs = now.difference(_clock).inSeconds;
+    _clock = now;
+    if (secs <= 0 || secs > 6 * 3600) return;
+    tale.playSeconds += secs;
+    // Deferred: this can run while a screen is being torn down.
+    final ach = achievements;
+    if (ach != null) Future(() => ach.add(Stat.playSeconds, secs));
+  }
   @override
   void save() => _save();
   @override
@@ -124,6 +175,19 @@ class TaleController extends ChangeNotifier implements StoryHost {
     } finally {
       _casting = false;
     }
+  }
+
+  /// Reference portraits of the characters in [text] (or recently on stage).
+  List<(String, String)> faceRefs(String text) {
+    final t = '${text.toLowerCase()} ${tale.log.reversed.take(6).map((e) => '${e.speaker ?? ''} ${e.text}').join(' ').toLowerCase()}';
+    final out = <(String, String)>[];
+    for (final n in tale.npcs.reversed) {
+      final first = n.name.split(' ').first.toLowerCase();
+      final path = n.portrait.aiImagePath;
+      if (path != null && first.length >= 3 && t.contains(first)) out.add((n.name, path));
+      if (out.length >= 3) break;
+    }
+    return out;
   }
 
   String? _voiceOf(String speaker) {
@@ -156,6 +220,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
 
   Future<void> flush() {
     _saveTimer?.cancel();
+    _bankTime();
     return store.save(tale);
   }
 
@@ -299,6 +364,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
       return;
     }
     audio.play('click');
+    if (isAi) _takeSnapshot();
     tale.turns++;
     tale.log.add(LogEntry(kind: LogKind.player, text: c.text));
     if (isAi) {
@@ -332,6 +398,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
     final t = text.trim();
     if (t.isEmpty || busy || tale.finished) return;
     if (isAi) {
+      _takeSnapshot();
       tale.turns++;
       tale.log.add(LogEntry(kind: LogKind.player, text: t));
       _notify();
@@ -542,7 +609,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
     var path = video ? await img.generateVideo(key, _scenePrompt(), usageTarget: tale.usage) : null;
     if (path == null && settings.useAiScenes && !img.isSuspended('image') && !_disposed) {
       video = false;
-      path = await img.generate(key, _scenePrompt(), size: '1536x1024', usageTarget: tale.usage, style: artStyle);
+      path = await img.generate(key, _scenePrompt(), size: '1536x1024', usageTarget: tale.usage, style: artStyle, references: faceRefs(tale.scene.imagePrompt));
     }
     if (path == null || _disposed) return;
     tale.sceneImages[s.title] = path;
@@ -558,7 +625,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
     if (img == null) return;
     img.resume();
     final s = tale.scene;
-    final path = await img.generate('scene_${tale.id}_${s.title.hashCode}', _scenePrompt(), size: '1536x1024', usageTarget: tale.usage, style: artStyle);
+    final path = await img.generate('scene_${tale.id}_${s.title.hashCode}', _scenePrompt(), size: '1536x1024', usageTarget: tale.usage, style: artStyle, references: faceRefs(s.imagePrompt));
     if (path == null || _disposed) return;
     tale.sceneImages[s.title] = path;
     tale.sceneImagePath = path;
@@ -618,7 +685,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
   Future<void> travelTo(MapLocation location) => freeText('I go back to ${location.name}.');
 
   /// A special-effect image (or video) for a dramatic beat, if enabled.
-  Future<void> effect(String moment, String description, {bool force = false}) async {
+  Future<void> effect(String moment, String description, {bool force = false, bool? video}) async {
     final img = images;
     if (img == null || _disposed) return;
     if (!force && (!settings.aiAutoImages || !settings.effectOn(moment))) return;
@@ -626,16 +693,16 @@ class TaleController extends ChangeNotifier implements StoryHost {
     _lastEffectTurn = tale.turns;
     final prompt = 'A dramatic, cinematic special-effect moment from a ${genre.name} story: $description Dynamic composition, striking light and motion.';
     final key = 'fx_${tale.id}_${DateTime.now().millisecondsSinceEpoch}';
-    var video = settings.useAiVideo && settings.videoEffects && !img.isSuspended('video');
-    var path = video ? await img.generateVideo(key, prompt, usageTarget: tale.usage) : null;
+    var film = video ?? (settings.useAiVideo && settings.videoEffects && !img.isSuspended('video'));
+    var path = film ? await img.generateVideo(key, prompt, usageTarget: tale.usage) : null;
     if (path == null && settings.useAiImages && !img.isSuspended('image') && !_disposed) {
-      video = false;
-      path = await img.generate(key, prompt, size: '1536x1024', usageTarget: tale.usage, category: 'effects', style: artStyle);
+      film = false;
+      path = await img.generate(key, prompt, size: '1536x1024', usageTarget: tale.usage, category: 'effects', style: artStyle, references: faceRefs(description));
     }
     if (path == null || _disposed) return;
     final cost = img.costs[path] ?? 0;
-    tale.log.add(LogEntry(kind: LogKind.system, text: description, meta: {'media': path, 'video': video, 'moment': moment, if (cost > 0) 'usd': cost}));
-    tale.addMedia(MediaItem(path: path, video: video, kind: 'effect', caption: description, turn: tale.turns, cost: cost));
+    tale.log.add(LogEntry(kind: LogKind.system, text: description, meta: {'media': path, 'video': film, 'moment': moment, if (cost > 0) 'usd': cost}));
+    tale.addMedia(MediaItem(path: path, video: film, kind: 'effect', caption: description, turn: tale.turns, cost: cost));
     _notify();
     _save();
   }

@@ -30,6 +30,9 @@ class SettingsController extends ChangeNotifier {
   /// OpenRouter key; models from it are stored with an `or:` prefix.
   String openRouterKey = '';
 
+  /// LM Studio server on this computer or network, e.g. http://192.168.1.20:1234.
+  String lmStudioUrl = '';
+
   // Video (short clips instead of, or alongside, images)
   bool videoEnabled = false;
   String videoModel = 'bytedance/seedance-v1.0-pro-fast';
@@ -59,6 +62,9 @@ class SettingsController extends ChangeNotifier {
 
   /// "Previously on…" recap when returning to a story after a while.
   bool aiRecaps = true;
+
+  /// The AI retells each round of combat as a short dramatic passage.
+  bool aiCombatNarration = false;
 
   // Per-item cost labels
   bool costPerMessage = false;
@@ -115,6 +121,10 @@ class SettingsController extends ChangeNotifier {
   bool streaming = true;
   bool autoRollEnemies = true;
   String playerName = '';
+  String playerBio = '';
+
+  /// Profile picture path (photo or AI); empty uses initials.
+  String playerAvatar = '';
 
   // Usage & cost
   bool showUsage = false;
@@ -137,10 +147,15 @@ class SettingsController extends ChangeNotifier {
 
   bool get hasVercelKey => apiKey.trim().isNotEmpty;
   bool get hasOpenRouterKey => openRouterKey.trim().isNotEmpty;
-  bool get hasApiKey => hasVercelKey || hasOpenRouterKey;
+  bool get hasLmStudio => lmStudioUrl.trim().isNotEmpty;
+  bool get hasApiKey => hasVercelKey || hasOpenRouterKey || hasLmStudio;
 
-  /// Whether the key for [model]'s router is present.
-  bool canUse(String model) => AiRoute.isOpenRouter(model) ? hasOpenRouterKey : hasVercelKey;
+  /// Whether the key (or server address) for [model]'s router is present.
+  bool canUse(String model) => switch (AiRoute.of(model)) {
+        AiRouter.openRouter => hasOpenRouterKey,
+        AiRouter.lmStudio => hasLmStudio,
+        AiRouter.vercel => hasVercelKey,
+      };
   bool get useAiVideo => videoEnabled && hasApiKey && canUse(videoModel);
   bool get useAiVoice => voiceEngine == 'ai' && hasApiKey && canUse(speechModel);
   bool get useElevenLabs => voiceEngine == 'elevenlabs' && elevenLabsKey.trim().isNotEmpty;
@@ -179,6 +194,7 @@ class SettingsController extends ChangeNotifier {
 
   void _apply() {
     GatewayClient.openRouterKey = openRouterKey;
+    GatewayClient.lmStudioUrl = lmStudioUrl;
     T.readingFont = taleTypewriterFont && readingFont == 'serif' ? 'mono' : readingFont;
     T.readingScale = readingScale;
   }
@@ -194,6 +210,7 @@ class SettingsController extends ChangeNotifier {
       fastModel = j['fastModel'] ?? fastModel;
       imageModel = j['imageModel'] ?? imageModel;
       openRouterKey = j['orKey'] ?? '';
+      lmStudioUrl = j['lmUrl'] ?? '';
       videoEnabled = j['video'] ?? false;
       videoModel = j['videoModel'] ?? videoModel;
       videoScenes = j['videoScenes'] ?? true;
@@ -212,6 +229,7 @@ class SettingsController extends ChangeNotifier {
       elevenVoiceName = j['elVoiceName'] ?? '';
       aiEffects = j['fx'] ?? false;
       aiRecaps = j['recaps'] ?? true;
+      aiCombatNarration = j['combatNarration'] ?? false;
       if (j['fxMoments'] is List) effectMoments = Set<String>.from(j['fxMoments']);
       costPerMessage = j['costMsg'] ?? false;
       costPerImage = j['costImg'] ?? false;
@@ -255,6 +273,8 @@ class SettingsController extends ChangeNotifier {
       streaming = j['stream'] ?? true;
       autoRollEnemies = j['autoRoll'] ?? true;
       playerName = j['playerName'] ?? '';
+      playerBio = j['playerBio'] ?? '';
+      playerAvatar = j['playerAvatar'] ?? '';
       showUsage = j['showUsage'] ?? false;
       ttsEnabled = j['tts'] ?? false;
       ttsRate = (j['ttsRate'] ?? 0.5).toDouble();
@@ -279,6 +299,7 @@ class SettingsController extends ChangeNotifier {
         'fastModel': fastModel,
         'imageModel': imageModel,
         'orKey': openRouterKey,
+        'lmUrl': lmStudioUrl,
         'video': videoEnabled,
         'videoModel': videoModel,
         'videoScenes': videoScenes,
@@ -297,6 +318,7 @@ class SettingsController extends ChangeNotifier {
         'elVoiceName': elevenVoiceName,
         'fx': aiEffects,
         'recaps': aiRecaps,
+        'combatNarration': aiCombatNarration,
         'fxMoments': effectMoments.toList(),
         'costMsg': costPerMessage,
         'costImg': costPerImage,
@@ -340,6 +362,8 @@ class SettingsController extends ChangeNotifier {
         'stream': streaming,
         'autoRoll': autoRollEnemies,
         'playerName': playerName,
+        'playerBio': playerBio,
+        'playerAvatar': playerAvatar,
         'showUsage': showUsage,
         'tts': ttsEnabled,
         'ttsRate': ttsRate,

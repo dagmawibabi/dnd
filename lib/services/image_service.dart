@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'ai/gateway_client.dart';
 import 'db/database.dart';
 import 'ai/model_catalog.dart';
 import 'settings.dart';
+import '../models/character.dart' show newId;
 
 const artStyle = 'Dark fantasy painterly illustration, dramatic chiaroscuro lighting, rich gold and crimson accents, highly detailed, Dungeons & Dragons concept art, no text, no watermark.';
 
@@ -115,8 +117,9 @@ class ImageService extends ChangeNotifier {
   /// Stores a user photo (camera/gallery). Returns a file path, or a data URI on web.
   Future<String> savePhoto(Uint8List bytes, {String ext = 'jpg'}) async {
     final dir = await _dir();
-    if (dir == null) return _storeBytes('photo-${DateTime.now().millisecondsSinceEpoch}', bytes);
-    final f = File('${dir.path}${Platform.pathSeparator}photo-${DateTime.now().millisecondsSinceEpoch}.$ext');
+    final key = 'photo-${newId()}';
+    if (dir == null) return _storeBytes(key, bytes);
+    final f = File('${dir.path}${Platform.pathSeparator}$key.$ext');
     await f.writeAsBytes(bytes, flush: true);
     return f.path;
   }
@@ -229,7 +232,23 @@ class ImageService extends ChangeNotifier {
     }
   }
 
-  Future<String?> generate(String key, String prompt, {String size = '1024x1024', Map<String, num>? usageTarget, String category = 'images', String? style}) async {
+  /// Small JPEG-free PNG thumbnails of reference portraits (keeps requests light).
+  Future<Uint8List?> _reference(String path) async {
+    final raw = await bytesOf(path);
+    if (raw == null) return null;
+    try {
+      final codec = await ui.instantiateImageCodec(raw, targetWidth: 384);
+      final frame = await codec.getNextFrame();
+      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    } catch (_) {
+      return raw.length < 600000 ? raw : null;
+    }
+  }
+
+  /// [references] are (name, image path) pairs of characters who appear, so
+  /// their faces stay the same from picture to picture.
+  Future<String?> generate(String key, String prompt, {String size = '1024x1024', Map<String, num>? usageTarget, String category = 'images', String? style, List<(String, String)> references = const []}) async {
     if (!settings.hasApiKey || !settings.canUse(settings.imageModel)) {
       _fail('image', key, GatewayException('Add a key for ${settings.imageModel} in Settings → AI providers to generate images.'));
       notifyListeners();
@@ -247,7 +266,24 @@ class ImageService extends ChangeNotifier {
       if (info != null && !info.canMakeImages) throw GatewayException('The selected model cannot generate images. Choose an image model in Settings.');
       if (isPortraitKey(key)) prompt = '$prompt $portraitFraming';
       final multimodal = info?.multimodalImage ?? settings.imageModel.contains('gemini');
-      final bytes = await client.generateImage(model: settings.imageModel, prompt: '$prompt\n\nStyle: ${style ?? artStyle}', multimodal: multimodal, size: size);
+      // Only chat image models that read images can use references.
+      final acceptsImages = info == null ? multimodal : info.inputModalities.contains('image');
+      final refs = <Uint8List>[];
+      final names = <String>[];
+      if (acceptsImages && (multimodal || AiRoute.isOpenRouter(settings.imageModel))) {
+        for (final (name, path) in references.take(3)) {
+          final b = await _reference(path);
+          if (b != null) {
+            refs.add(b);
+            names.add(name);
+          }
+        }
+      }
+      if (refs.isNotEmpty) {
+        prompt = '$prompt\n\nReference images are attached in this order: ${[for (final (i, n) in names.indexed) '${i + 1}) $n'].join(', ')}. '
+            'Keep each character\'s face, hair, skin tone, build and outfit exactly consistent with their reference. Do not copy the reference composition or background.';
+      }
+      final bytes = await client.generateImage(model: settings.imageModel, prompt: '$prompt\n\nStyle: ${style ?? artStyle}', multimodal: multimodal, size: size, references: refs);
       final path = await _write(key, bytes, 'png');
       costs[path] = client.spentCost;
       tokens[path] = client.spentTokens;

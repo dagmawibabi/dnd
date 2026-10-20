@@ -8,8 +8,9 @@ import '../screens/settings/settings_screen.dart';
 
 /// Why AI writing isn't available right now, in plain words (null if it is).
 String? aiTextBlocker(SettingsController s) {
-  if (!s.hasApiKey) return 'Add a Vercel AI Gateway or OpenRouter key in Settings → AI providers. Keys stay on this device.';
+  if (!s.hasApiKey) return 'Add a Vercel AI Gateway or OpenRouter key, or connect LM Studio, in Settings → AI providers. Keys stay on this device.';
   if (!s.aiText) return 'The AI storyteller is turned off. Turn it on in Settings → Text & story.';
+  if (!s.canUse(s.textModel) && AiRoute.isLmStudio(s.textModel)) return 'Your story model (${AiRoute.bare(s.textModel)}) runs in LM Studio, but no server address is set. Add it in Settings → AI providers.';
   if (!s.canUse(s.textModel)) return 'Your story model (${AiRoute.bare(s.textModel)}) runs on ${AiRoute.routerName(s.textModel)}, but there\'s no key for it. Add that key, or pick a model from a router you have a key for.';
   return null;
 }
@@ -38,4 +39,24 @@ Future<void> showAiUnavailable(BuildContext context, {String feature = 'AI stori
           AppButton(label: 'Not now', kind: ButtonKind.ghost, onPressed: () => Navigator.pop(ctx)),
         ]),
       ));
+}
+
+/// When a story opens, quietly checks that LM Studio answers if a local model
+/// writes it, and says so in a snackbar when it doesn't.
+Future<void> checkLocalAi(BuildContext context, {bool confirm = false}) async {
+  final s = context.read<SettingsController>();
+  if (!s.useAiText || !(AiRoute.isLmStudio(s.textModel) || AiRoute.isLmStudio(s.fastModel))) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final ok = await GatewayClient.lmStudioReachable(s.lmStudioUrl);
+  if (!context.mounted || messenger == null) return;
+  messenger.hideCurrentSnackBar();
+  if (ok) {
+    if (confirm) messenger.showSnackBar(const SnackBar(content: Text('LM Studio is connected.'), duration: Duration(seconds: 2)));
+    return;
+  }
+  messenger.showSnackBar(SnackBar(
+    duration: const Duration(seconds: 8),
+    content: Text('LM Studio isn\'t answering at ${GatewayClient.normalizeLmUrl(s.lmStudioUrl)}. Start its server on your computer and check you\'re on the same Wi-Fi.'),
+    action: SnackBarAction(label: 'Check again', onPressed: () => checkLocalAi(context, confirm: true)),
+  ));
 }

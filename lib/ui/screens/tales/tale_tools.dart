@@ -145,7 +145,10 @@ class TaleStatusBar extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => showTaleVitals(context, ctl),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Text(g.healthLabel, style: mono ? T.mono(11, color: AppColors.textMuted) : T.caption()),
               const SizedBox(width: 6),
@@ -156,6 +159,7 @@ class TaleStatusBar extends StatelessWidget {
             const SizedBox(height: 5),
             Bar(value: t.health, max: 100, color: t.health < 30 ? AppColors.danger : g.color),
           ]),
+          ),
         ),
         for (final p in recent)
           Padding(
@@ -170,37 +174,14 @@ class TaleStatusBar extends StatelessWidget {
   }
 }
 
-/// The text adventure menu: shared story tools plus layout, font and sound.
-void showTaleMenu(BuildContext context, TaleController ctl, {required bool terminal, required VoidCallback switchLayout, required VoidCallback restart}) {
+/// Reading, world and export options. Play controls live in Story tools.
+void showTaleMenu(BuildContext context, TaleController ctl) {
   final s = context.read<SettingsController>();
   showAppSheet(context, builder: (ctx) => ListenableBuilder(
         listenable: s,
         builder: (ctx, _) => ListView(shrinkWrap: true, padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
           SheetTitle(ctl.tale.title, subtitle: '${ctl.genre.name} · ${ctl.isAi ? 'AI narrator' : 'Handcrafted'} · ${ctl.tale.turns} turns'),
           ...storyMenuRows(context, ctx, ctl),
-          const SizedBox(height: 12),
-          RowGroup(children: [
-            ListRow(
-              leading: Icon(terminal ? Icons.chrome_reader_mode_outlined : Icons.terminal, size: 20),
-              title: terminal ? 'Switch to book layout' : 'Switch to terminal layout',
-              subtitle: terminal ? 'Illustrated pages with tappable choices' : 'Classic monospace text with a > prompt',
-              onTap: () {
-                Navigator.pop(ctx);
-                switchLayout();
-              },
-            ),
-            ListRow(leading: const Icon(Icons.music_note_outlined, size: 20), title: 'Music', trailing: Switch(value: s.musicEnabled, onChanged: (v) => s.update((s) => s.musicEnabled = v))),
-            ListRow(leading: const Icon(Icons.water_drop_outlined, size: 20), title: 'Ambient sound', trailing: Switch(value: s.ambienceEnabled, onChanged: (v) => s.update((s) => s.ambienceEnabled = v))),
-            ListRow(
-              leading: const Icon(Icons.replay, size: 20),
-              title: 'Start over',
-              subtitle: 'A fresh copy of this story; this one is kept',
-              onTap: () {
-                Navigator.pop(ctx);
-                restart();
-              },
-            ),
-          ]),
         ]),
       ));
 }
@@ -213,3 +194,87 @@ Future<Tale> restartTale(BuildContext context, Tale old) async {
 }
 
 TaleGenre genreOf(Tale t) => genreById(t.genre);
+
+
+/// Tap the health bar: the protagonist's condition, gear, goals and company.
+void showTaleVitals(BuildContext context, TaleController ctl) {
+  showAppSheet(context, builder: (ctx) => ListenableBuilder(
+        listenable: ctl,
+        builder: (ctx, _) {
+          final t = ctl.tale;
+          final g = ctl.genre;
+          final color = t.health < 30 ? AppColors.danger : g.color;
+          final active = t.goals.where((q) => q.status == QuestStatus.active).toList();
+          return SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.75,
+            child: ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 28), children: [
+              Row(children: [
+                Icon(g.icon, color: g.color),
+                const SizedBox(width: 10),
+                Expanded(child: Text(t.protagonist == 'You' ? 'You' : t.protagonist, style: T.h2())),
+                Text('${t.turns} turns · ${_dur(t.playSeconds)}', style: T.caption()),
+              ]),
+              const SizedBox(height: 16),
+              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('${t.health}', style: T.number(34, color: color)),
+                Text(' / 100 ${g.healthLabel.toLowerCase()}', style: T.h3(color: AppColors.textMuted)),
+              ]),
+              const SizedBox(height: 8),
+              Bar(value: t.health, max: 100, color: color),
+              const SizedBox(height: 8),
+              Text(
+                t.health >= 75 ? 'Holding up well.' : t.health >= 40 ? 'Shaken, but standing.' : t.health > 0 ? 'In real danger. Choose carefully.' : 'Spent.',
+                style: T.small(),
+              ),
+              if (t.status.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Tag(t.status, icon: Icons.warning_amber_outlined, color: AppColors.warning),
+              ],
+              const SectionLabel('Carrying'),
+              if (t.inventory.isEmpty) Text('Nothing yet.', style: T.small()),
+              Wrap(spacing: 6, runSpacing: 6, children: [for (final i in t.inventory) Tag(i, icon: Icons.inventory_2_outlined)]),
+              const SectionLabel('Goals'),
+              if (active.isEmpty) Text(ctl.isAi ? 'No open goals.' : 'Handcrafted stories keep their goals secret.', style: T.small()),
+              for (final q in active)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(children: [
+                    Icon(Icons.flag_outlined, size: 16, color: g.color),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(q.title, style: T.small(color: AppColors.text))),
+                  ]),
+                ),
+              if (t.npcs.isNotEmpty) ...[
+                const SectionLabel('Around you'),
+                Wrap(spacing: 10, runSpacing: 10, children: [
+                  for (final n in t.npcs.reversed.take(8))
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        showCharacterChat(context, ctl, n);
+                      },
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        NpcPortrait(npc: n, size: 40),
+                        const SizedBox(height: 4),
+                        SizedBox(width: 56, child: Text(n.name.split(' ').first, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: T.caption())),
+                      ]),
+                    ),
+                ]),
+              ],
+              const SizedBox(height: 16),
+              AppButton(
+                label: 'Open journal',
+                icon: Icons.book_outlined,
+                kind: ButtonKind.secondary,
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  showTaleJournal(context, ctl);
+                },
+              ),
+            ]),
+          );
+        },
+      ));
+}
+
+String _dur(int s) => s < 60 ? '${s}s' : (s < 3600 ? '${s ~/ 60}m' : '${s ~/ 3600}h ${(s % 3600) ~/ 60}m');

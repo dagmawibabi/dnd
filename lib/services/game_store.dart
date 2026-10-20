@@ -255,7 +255,10 @@ class AdventureSummary {
     this.heroPortrait,
     Map<String, num>? usage,
     this.engineLabel = '',
+    this.playSeconds = 0,
   }) : usage = usage ?? const {};
+
+  final int playSeconds;
 
   /// Token and cost totals for this adventure: in, out, calls, images, cost.
   final Map<String, num> usage;
@@ -296,6 +299,7 @@ class AdventureSummary {
         finished: a.finished,
         heroPortrait: a.hero.portrait.toJson(),
         usage: Map<String, num>.of(a.usage),
+        playSeconds: a.playSeconds,
       );
 
   Map<String, dynamic> toJson() => {
@@ -315,6 +319,7 @@ class AdventureSummary {
         'fin': finished,
         'portrait': heroPortrait,
         'usage': usage,
+        'play': playSeconds,
       };
 
   factory AdventureSummary.fromJson(Map<String, dynamic> j) => AdventureSummary(
@@ -334,5 +339,6 @@ class AdventureSummary {
         finished: j['fin'] ?? false,
         heroPortrait: j['portrait'] == null ? null : Map<String, dynamic>.from(j['portrait']),
         usage: Map<String, num>.from(j['usage'] ?? const {}),
+        playSeconds: (j['play'] as num?)?.toInt() ?? 0,
       );
 }

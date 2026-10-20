@@ -17,7 +17,10 @@ import '../../widgets/typewriter.dart';
 
 /// One item in the story feed.
 class LogEntryView extends StatelessWidget {
-  const LogEntryView({super.key, required this.entry, required this.adventure, this.animate = false, this.speed = 1, this.onAnimated, this.latestScene = false, this.onTalk, this.onJournal});
+  const LogEntryView({super.key, required this.entry, required this.adventure, this.animate = false, this.speed = 1, this.onAnimated, this.latestScene = false, this.onTalk, this.onJournal, this.onPassage});
+
+  /// Long-press actions for a passage (listen, illustrate, regenerate…).
+  final void Function(LogEntry)? onPassage;
   final void Function(Npc)? onTalk;
 
   /// Opens the journal on its quests or goals.
@@ -36,9 +39,10 @@ class LogEntryView extends StatelessWidget {
     if ((tokens > 0 || usd > 0) && entry.meta['media'] == null && showItemCost(context, message: true)) {
       child = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [child, Padding(padding: const EdgeInsets.only(bottom: 6), child: CostBadge(tokens: tokens as num, cost: usd as num))]);
     }
-    if (entry.kind == LogKind.narration) {
-      // Long-press any passage to hear it.
-      child = GestureDetector(onLongPress: () => context.read<Narrator>().speakNow(entry.text), child: child);
+    if (entry.kind == LogKind.narration || entry.kind == LogKind.dialogue || entry.kind == LogKind.companion) {
+      // Long-press any passage for its actions (or just to hear it).
+      final passage = onPassage;
+      child = GestureDetector(onLongPress: passage != null ? () => passage(entry) : () => context.read<Narrator>().speakNow(entry.text, speaker: entry.speaker), child: child);
     }
     final person = adventure.personNamed(entry.speaker);
     if (person != null && onTalk != null && (entry.kind == LogKind.dialogue || entry.kind == LogKind.companion)) {

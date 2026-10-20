@@ -15,6 +15,7 @@ import '../../../theme/ui.dart';
 import '../achievements_screen.dart';
 import '../adventure/adventure_extras.dart';
 import 'model_picker.dart';
+import 'profile_card.dart';
 import '../story/story_tools.dart' show ReadingControls;
 
 String _modelSub(ModelCatalog cat, String id) {
@@ -57,10 +58,12 @@ class SettingsScreen extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
           onTap: () => _push(context, title, page),
         );
-    final keys = [if (s.hasVercelKey) 'Vercel', if (s.hasOpenRouterKey) 'OpenRouter'];
+    final keys = [if (s.hasVercelKey) 'Vercel', if (s.hasOpenRouterKey) 'OpenRouter', if (s.hasLmStudio) 'LM Studio'];
     final list = ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
       children: [
+        const SizedBox(height: 4),
+        const ProfileCard(),
         const SectionLabel('AI'),
         RowGroup(children: [
           hub(Icons.key_outlined, 'AI providers', keys.isEmpty ? 'Not connected — everything runs offline' : 'Connected: ${keys.join(' + ')}', (_) => const _ProvidersPage(), on: keys.isNotEmpty),
@@ -147,7 +150,7 @@ class SettingsScreen extends StatelessWidget {
         ]),
         const SectionLabel('Data'),
         RowGroup(children: [
-          ListRow(leading: const Icon(Icons.upload_file_outlined, size: 20), title: 'Export backup', subtitle: 'Heroes, adventures, stories, campaigns and achievements', onTap: () => exportBackup(context)),
+          ListRow(leading: const Icon(Icons.upload_file_outlined, size: 20), title: 'Export backup', subtitle: 'Heroes, stories, campaigns, achievements, your profile and codex art', onTap: () => exportBackup(context)),
           ListRow(leading: const Icon(Icons.download_outlined, size: 20), title: 'Import backup', subtitle: 'Merge a DnD backup file into this device', onTap: () => importBackup(context)),
           ListRow(title: 'Show onboarding again', onTap: () => s.update((s) => s.onboarded = false)),
           ListRow(
@@ -197,7 +200,7 @@ class _ProvidersPage extends StatelessWidget {
     final s = context.watch<SettingsController>();
     String masked(String k) => k.length > 8 ? '••••${k.substring(k.length - 4)}' : '••••';
     return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 40), children: [
-      Text('Use either router or both. Every model setting remembers which router it comes from, so you can mix them, for example a free OpenRouter story model with Vercel images.', style: T.small()),
+      Text('Use any router, or several. Every model setting remembers which router it comes from, so you can mix them, for example a free local LM Studio story model with Vercel images.', style: T.small()),
       const SectionLabel('Routers'),
       RowGroup(children: [
         ListRow(
@@ -213,6 +216,13 @@ class _ProvidersPage extends StatelessWidget {
           subtitle: s.hasOpenRouterKey ? 'Connected · ${masked(s.openRouterKey)}' : 'Not set · openrouter.ai → Keys (many free models)',
           trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
           onTap: () => showAppSheet(context, builder: (_) => const _KeySheet(router: AiRouter.openRouter)),
+        ),
+        ListRow(
+          leading: const Icon(Icons.computer_outlined, size: 20),
+          title: 'LM Studio (local)',
+          subtitle: s.hasLmStudio ? 'Connected · ${GatewayClient.normalizeLmUrl(s.lmStudioUrl)}' : 'Not set · free text from a model on your own computer',
+          trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+          onTap: () => showAppSheet(context, builder: (_) => const _LmStudioSheet()),
         ),
       ]),
       if (s.hasApiKey) ...[
@@ -348,6 +358,186 @@ class _KeySheetState extends State<_KeySheet> {
   }
 }
 
+/// Connect to an LM Studio server and pick which local model writes stories.
+class _LmStudioSheet extends StatefulWidget {
+  const _LmStudioSheet();
+
+  @override
+  State<_LmStudioSheet> createState() => _LmStudioSheetState();
+}
+
+class _LmStudioSheetState extends State<_LmStudioSheet> {
+  late final _ctrl = TextEditingController(text: context.read<SettingsController>().lmStudioUrl);
+  bool _loading = false;
+  String? _error;
+  List<LmModel>? _models;
+  String? _story;
+  String? _chars;
+
+  /// Context below this makes long D&D turns get cut off.
+  static const _storyContext = 16384;
+  static const _charsContext = 4096;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_ctrl.text.trim().isNotEmpty) WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final models = await GatewayClient.lmStudioDetails(_ctrl.text);
+      if (!mounted) return;
+      final s = context.read<SettingsController>();
+      final ids = [for (final m in models) m.id];
+      // Keep current local picks; otherwise prefer a model that is already loaded.
+      String? pick(String setting) {
+        final cur = AiRoute.isLmStudio(setting) ? AiRoute.bare(setting) : null;
+        if (cur != null && ids.contains(cur)) return cur;
+        return models.where((m) => m.loaded).firstOrNull?.id ?? ids.firstOrNull;
+      }
+
+      setState(() {
+        _models = models;
+        _story = pick(s.textModel);
+        _chars = pick(s.fastModel);
+        _error = models.isEmpty ? 'Connected, but no models are available. Load or download one in LM Studio.' : null;
+      });
+    } on GatewayException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _save() {
+    final cat = context.read<ModelCatalog>();
+    context.read<SettingsController>().update((s) {
+      s.lmStudioUrl = GatewayClient.normalizeLmUrl(_ctrl.text);
+      s.textModel = '${AiRoute.lmPrefix}$_story';
+      s.fastModel = '${AiRoute.lmPrefix}$_chars';
+      s.aiText = true;
+    });
+    cat.loadLocal();
+    Navigator.pop(context);
+  }
+
+  static String _k(int n) => n >= 1024 ? '${(n / 1024).round()}K' : '$n';
+
+  String _label(LmModel m) => '${m.id.split('/').last}${m.loaded ? (m.context == null ? ' · loaded' : ' · ${_k(m.context!)} loaded') : ''}';
+
+  /// A plain-words warning when a picked model's context is too small.
+  String? _contextWarning() {
+    final byId = {for (final m in _models ?? const <LmModel>[]) m.id: m};
+    final story = byId[_story];
+    final chars = byId[_chars];
+    String fix(LmModel m, int need) => 'In LM Studio, eject ${m.id} and load it again with Context Length set to ${_k(need)} or more.';
+    if (story?.context != null && story!.context! < _storyContext) {
+      return '${story.id} is loaded with only a ${_k(story.context!)} context. Long stories will get cut off or come back empty. ${fix(story, _storyContext)}';
+    }
+    if (chars?.context != null && chars!.context! < _charsContext) {
+      return '${chars.id} is loaded with only a ${_k(chars.context!)} context, too small for character chats. ${fix(chars, _charsContext)}';
+    }
+    return null;
+  }
+
+  Widget _picker(String title, String subtitle, String? value, ValueChanged<String?> onChanged) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: T.h3()),
+          const SizedBox(height: 2),
+          Text(subtitle, style: T.caption()),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            initialValue: value,
+            isExpanded: true,
+            style: T.body(),
+            items: [for (final m in _models!) DropdownMenuItem(value: m.id, child: Text(_label(m), maxLines: 1, overflow: TextOverflow.ellipsis))],
+            onChanged: onChanged,
+          ),
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.read<SettingsController>();
+    final warning = _models == null ? null : _contextWarning();
+    final unloaded = {_story, _chars}.where((id) => _models?.any((m) => m.id == id && !m.loaded && m.maxContext != null) ?? false).toList();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(0, 0, 0, MediaQuery.viewInsetsOf(context).bottom + 20),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SheetTitle('LM Studio', subtitle: 'In LM Studio: Developer → start the server and turn on "Serve on Local Network". Then paste the address it shows. Text only; images and voice still use a router or the device.'),
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              TextField(
+                controller: _ctrl,
+                autofocus: _ctrl.text.isEmpty,
+                keyboardType: TextInputType.url,
+                style: T.body(),
+                onSubmitted: (_) => _connect(),
+                onChanged: (_) => setState(() {
+                  _models = null;
+                  _error = null;
+                }),
+                decoration: const InputDecoration(hintText: 'http://192.168.1.20:1234', prefixIcon: Icon(Icons.lan_outlined, size: 20)),
+              ),
+              const SizedBox(height: 6),
+              Text('On a phone, use the network address (not 127.0.0.1, which is the phone itself).', style: T.caption()),
+              if (_error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_error!, style: T.small(color: AppColors.danger))),
+              const SizedBox(height: 14),
+              AppButton(label: _models == null ? 'Connect' : 'Reconnect', icon: Icons.power_outlined, kind: _models == null ? ButtonKind.primary : ButtonKind.secondary, busy: _loading, onPressed: _ctrl.text.trim().isEmpty ? null : _connect),
+              if (_models != null && _models!.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                _picker('Story', 'Runs the Dungeon Master and narrates text adventures. Pick your strongest model.', _story, (v) => setState(() => _story = v)),
+                _picker('Characters', 'Chats with characters and handles quick tasks like recaps and ideas. A smaller, faster model works well.', _chars, (v) => setState(() => _chars = v)),
+                if (warning != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: AppColors.warning.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.warning.withValues(alpha: 0.4))),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warning),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(warning, style: T.small(color: AppColors.text))),
+                    ]),
+                  ),
+                if (unloaded.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 12), child: Text('${unloaded.join(' and ')} ${unloaded.length == 1 ? 'isn\'t' : 'aren\'t'} loaded yet. LM Studio loads it on first use, which can take a moment. Load it yourself to choose its context length.', style: T.caption())),
+                AppButton(label: 'Save', icon: Icons.check, onPressed: _story == null || _chars == null ? null : _save),
+              ],
+              if (s.hasLmStudio) ...[
+                const SizedBox(height: 8),
+                AppButton(
+                  label: 'Disconnect',
+                  kind: ButtonKind.ghost,
+                  onPressed: () {
+                    final cat = context.read<ModelCatalog>();
+                    s.update((s) => s.lmStudioUrl = '');
+                    cat.loadLocal();
+                    Navigator.pop(context);
+                  },
+                ),
+              ],
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
 // ------------------------------------------------------------------ text
 
 class _TextPage extends StatelessWidget {
@@ -390,6 +580,7 @@ class _TextPage extends StatelessWidget {
       const SectionLabel('What the AI writes'),
       RowGroup(children: [
         _SwitchRow(title: 'Character chats', subtitle: 'Talk to anyone; relationships change with what you say', value: s.aiNpcChat, onChanged: (v) => s.update((s) => s.aiNpcChat = v)),
+        _SwitchRow(title: 'Narrate combat', subtitle: 'The AI retells each round of D&D combat as a short dramatic passage. Adds a small cost per round.', value: s.aiCombatNarration, onChanged: (v) => s.update((s) => s.aiCombatNarration = v)),
         _SwitchRow(title: '"Previously on…" recaps', subtitle: 'When you return to a story after a few hours', value: s.aiRecaps, onChanged: (v) => s.update((s) => s.aiRecaps = v)),
         _SwitchRow(title: 'Story summaries', subtitle: 'Compress long stories so the AI remembers them', value: s.aiSummaries, onChanged: (v) => s.update((s) => s.aiSummaries = v)),
         _SwitchRow(title: 'Character creation', subtitle: 'AI-built heroes and backstories', value: s.aiCreator, onChanged: (v) => s.update((s) => s.aiCreator = v)),

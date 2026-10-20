@@ -17,9 +17,13 @@ class UsageTotals {
   int videos = 0;
   int seconds = 0;
   int characters = 0;
+  int cachedTokens = 0;
   double cost = 0;
 
   int get tokens => inputTokens + outputTokens;
+
+  /// Share of input tokens served from a prompt cache.
+  double get cacheShare => inputTokens == 0 ? 0 : cachedTokens / inputTokens;
 
   void add(UsageEvent e, double c) {
     inputTokens += e.inputTokens;
@@ -28,6 +32,7 @@ class UsageTotals {
     videos += e.videos;
     seconds += e.seconds;
     characters += e.characters;
+    cachedTokens += e.cachedTokens;
     calls++;
     cost += c;
   }
@@ -38,10 +43,11 @@ class UsageTotals {
         if (images > 0) '$images image${images == 1 ? '' : 's'}',
         if (videos > 0) '$videos video${videos == 1 ? '' : 's'} (${seconds}s)',
         if (characters > 0) '${fmtTokens(characters)} chars voiced',
+        if (cachedTokens > 0) '${(cacheShare * 100).round()}% cached',
         '$calls call${calls == 1 ? '' : 's'}',
       ].join(' · ');
 
-  Map<String, dynamic> toJson() => {'i': inputTokens, 'o': outputTokens, 'c': calls, 'img': images, 'vid': videos, 'sec': seconds, 'ch': characters, 'usd': cost};
+  Map<String, dynamic> toJson() => {'i': inputTokens, 'o': outputTokens, 'c': calls, 'img': images, 'vid': videos, 'sec': seconds, 'ch': characters, 'cache': cachedTokens, 'usd': cost};
   static UsageTotals fromJson(Map<String, dynamic> j) => UsageTotals()
     ..inputTokens = (j['i'] ?? 0) as int
     ..outputTokens = (j['o'] ?? 0) as int
@@ -50,6 +56,7 @@ class UsageTotals {
     ..videos = (j['vid'] ?? 0) as int
     ..seconds = (j['sec'] ?? 0) as int
     ..characters = (j['ch'] ?? 0) as int
+    ..cachedTokens = (j['cache'] ?? 0) as int
     ..cost = ((j['usd'] ?? 0) as num).toDouble();
 }
 
@@ -140,7 +147,11 @@ class UsageTracker extends ChangeNotifier {
     if (e.reportedCost != null) return e.reportedCost!;
     final m = _catalog.byId(e.model);
     if (m == null) return 0;
-    var c = e.inputTokens / 1e6 * (m.inputPrice ?? 0) + e.outputTokens / 1e6 * (m.outputPrice ?? 0);
+    // Cached input is billed at a fraction: about 10% on Anthropic, 25% on Gemini, 50% elsewhere.
+    final id = AiRoute.bare(e.model);
+    final cacheRate = id.startsWith('anthropic/') ? 0.1 : (id.startsWith('google/') ? 0.25 : 0.5);
+    final cached = e.cachedTokens.clamp(0, e.inputTokens);
+    var c = (e.inputTokens - cached + cached * cacheRate) / 1e6 * (m.inputPrice ?? 0) + e.outputTokens / 1e6 * (m.outputPrice ?? 0);
     if (e.images > 0 && m.imagePrice != null && (m.type == 'image' || e.outputTokens == 0)) {
       c = e.images * m.imagePrice! + e.inputTokens / 1e6 * (m.inputPrice ?? 0);
     }
@@ -165,6 +176,7 @@ class UsageTracker extends ChangeNotifier {
       if (e.videos > 0) u['videos'] = (u['videos'] ?? 0) + e.videos;
       if (e.seconds > 0) u['seconds'] = (u['seconds'] ?? 0) + e.seconds;
       if (e.characters > 0) u['chars'] = (u['chars'] ?? 0) + e.characters;
+      if (e.cachedTokens > 0) u['cached'] = (u['cached'] ?? 0) + e.cachedTokens;
       u['cost'] = (u['cost'] ?? 0) + c;
       for (final prefix in ['category:${e.category}', 'model:${Uri.encodeComponent(e.model)}', 'categoryModel:${e.category}:${Uri.encodeComponent(e.model)}']) {
         final bucket = UsageTotals()..add(e, c);

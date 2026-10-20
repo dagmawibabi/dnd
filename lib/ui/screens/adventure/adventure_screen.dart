@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../widgets/ai_gate.dart';
 import '../../../game/adventure_controller.dart';
 import '../../../game/dice.dart';
 import '../../../models/adventure.dart';
@@ -30,7 +31,7 @@ import 'log_view.dart';
 import 'map_screen.dart';
 import 'sheets.dart';
 import '../story/story_tools.dart';
-import 'text_adventure_screen.dart';
+import '../story/story_extras.dart';
 
 /// Hooks a controller's pending rolls / level-ups to dialogs.
 mixin AdventureDialogs<T extends StatefulWidget> on State<T> {
@@ -107,6 +108,9 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkLocalAi(context);
+    });
     _audio = context.read<AudioService>();
     for (final e in widget.adventure.log) {
       _ctl.animated.add('${e.at.microsecondsSinceEpoch}');
@@ -161,33 +165,6 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(children: [
               ...adventureMenuRows(context, ctx, _ctl),
-              const SizedBox(height: 12),
-              RowGroup(children: [
-                ListRow(title: 'Music', trailing: Switch(value: settings.musicEnabled, onChanged: (v) => settings.update((s) => s.musicEnabled = v))),
-                ListRow(title: 'Sound effects', trailing: Switch(value: settings.sfxEnabled, onChanged: (v) => settings.update((s) => s.sfxEnabled = v))),
-                ListRow(title: 'Typewriter effect', trailing: Switch(value: settings.typewriter, onChanged: (v) => settings.update((s) => s.typewriter = v))),
-              ]),
-              const SizedBox(height: 12),
-              RowGroup(children: [
-                ListRow(
-                  leading: const Icon(Icons.casino_outlined, size: 20),
-                  title: 'Roll a d20',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    DiceCheckSheet.show(context, label: 'Roll', modifier: 0);
-                  },
-                ),
-                ListRow(
-                  leading: const Icon(Icons.notes, size: 20),
-                  title: 'Switch to text-only layout',
-                  onTap: () {
-                    _ctl.adventure.textMode = true;
-                    _ctl.save();
-                    Navigator.pop(ctx);
-                    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => TextAdventureScreen(adventure: _ctl.adventure)));
-                  },
-                ),
-              ]),
             ]),
           ),
         ]),
@@ -204,15 +181,17 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(a.title, style: T.h3(), overflow: TextOverflow.ellipsis),
-          Text(_ctl.inCombat ? 'In combat' : scene, style: T.caption(color: _ctl.inCombat ? AppColors.danger : AppColors.textFaint), overflow: TextOverflow.ellipsis),
-        ]),
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => showStoryOverview(context, _ctl),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(a.title, style: T.h3(), overflow: TextOverflow.ellipsis),
+            Text(_ctl.inCombat ? 'In combat' : scene, style: T.caption(color: _ctl.inCombat ? AppColors.danger : AppColors.textFaint), overflow: TextOverflow.ellipsis),
+          ]),
+        ),
         actions: [
-          UsageChip(usage: a.usage, title: a.title, turns: a.turns, storyId: a.id),
           if (!wide) IconButton(tooltip: 'Map', icon: Badge(isLabelVisible: m != null, smallSize: 6, child: const Icon(Icons.map_outlined)), onPressed: () => openMapScreen(context, _ctl)),
           IconButton(tooltip: 'Journal', icon: const Icon(Icons.book_outlined), onPressed: () => showJournalSheet(context, _ctl)),
-          if (!wide) IconButton(tooltip: 'Party', icon: const Icon(Icons.people_outline), onPressed: () => showPartySheet(context, _ctl)),
           IconButton(tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: _menu),
           const SizedBox(width: 4),
         ],
@@ -247,7 +226,10 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
           InkWell(onTap: () => showPartySheet(context, _ctl), customBorder: const CircleBorder(), child: CharacterPortrait(character: hero, size: 32)),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => showVitalsSheet(context, _ctl),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
                 Text('HP', style: T.caption()),
                 const SizedBox(width: 6),
@@ -258,6 +240,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
               const SizedBox(height: 6),
               Bar(value: hero.hp, max: hero.maxHp, color: hero.hp / hero.maxHp < 0.3 ? AppColors.danger : AppColors.hp),
             ]),
+            ),
           ),
           for (final c in _ctl.adventure.companions)
             Padding(padding: const EdgeInsets.only(left: 8), child: Opacity(opacity: c.hp > 0 ? 1 : 0.4, child: InkWell(onTap: () => showNpcChat(context, _ctl, _ctl.adventure.personNamed(c.name)!), child: CharacterPortrait(character: c, size: 26)))),
@@ -281,7 +264,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
         itemBuilder: (ctx, i) {
           if (i == 0) {
             if ((_ctl.streaming ?? '').isNotEmpty) return Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: T.reading()));
-            if (_ctl.busy || _ctl.streaming != null) return const _Thinking();
+            if (_ctl.busy || _ctl.streaming != null) return ThinkingIndicator(first: a.log.isEmpty);
             if (_ctl.error != null) return ErrorCard(error: _ctl.error!, label: 'Story');
             if (a.finished) {
               return Padding(
@@ -319,7 +302,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
           final anim = settings.typewriter && !_ctl.animated.contains(id) && (e.kind == LogKind.narration || e.kind == LogKind.dialogue) && idx >= a.log.length - 6;
           return FadeIn(
             key: ValueKey(id),
-            child: LogEntryView(entry: e, adventure: a, onTalk: (npc) => showNpcChat(context, _ctl, npc), onJournal: () => showJournalSheet(context, _ctl), animate: anim, speed: settings.typeSpeed * 2, latestScene: idx == lastSceneIdx, onAnimated: () => _ctl.animated.add(id)),
+            child: LogEntryView(entry: e, adventure: a, onTalk: (npc) => showNpcChat(context, _ctl, npc), onJournal: () => showJournalSheet(context, _ctl), onPassage: (e) => showPassageSheet(context, _ctl, e), animate: anim, speed: settings.typeSpeed * 2, latestScene: idx == lastSceneIdx, onAnimated: () => _ctl.animated.add(id)),
           );
         },
       ),
@@ -349,12 +332,13 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (a.choices.isNotEmpty)
-          TextButton.icon(
-            onPressed: () => setState(() => _choicesCollapsed = !_choicesCollapsed),
-            icon: Icon(_choicesCollapsed ? Icons.expand_more : Icons.expand_less),
-            label: Text(_choicesCollapsed ? 'Show ${a.choices.length} choices' : 'Hide choices'),
-          ),
+        const NowReading(),
+        ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: a.choices.isNotEmpty,
+          onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed),
+          trailing: [
+            if (MediaQuery.sizeOf(context).width < 1100)
+              IconButton(tooltip: 'Party', visualDensity: VisualDensity.compact, icon: const Icon(Icons.people_outline, size: 20), onPressed: () => showPartySheet(context, _ctl)),
+          ]),
         if (a.choices.isNotEmpty && !_ctl.busy && !_choicesCollapsed)
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.34),
@@ -378,8 +362,8 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
         const SizedBox(height: 4),
         Row(children: [
           Semantics(
-            label: 'Ask the oracle',
-            child: CircleIconButton(icon: Icons.help_outline, size: 44, tooltip: 'Ask the oracle', onPressed: disabled ? null : () => showOracleSheet(context, _ctl)),
+            label: 'Story tools',
+            child: CircleIconButton(icon: Icons.lightbulb_outline, size: 44, tooltip: 'Story tools', onPressed: () => showStoryActions(context, _ctl)),
           ),
           const SizedBox(width: 8),
           Expanded(

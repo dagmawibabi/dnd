@@ -24,6 +24,7 @@ import 'map_screen.dart';
 import 'sheets.dart';
 import '../story/notes_screen.dart';
 import '../story/story_tools.dart';
+import '../story/story_extras.dart';
 
 /// Minimal, classic text-adventure presentation of the same game.
 class TextAdventureScreen extends StatefulWidget {
@@ -248,30 +249,23 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Text(a.title, style: T.h3(), overflow: TextOverflow.ellipsis),
+        title: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => showStoryOverview(context, _ctl), child: Text(a.title, style: T.h3(), overflow: TextOverflow.ellipsis)),
         actions: [
-          UsageChip(usage: a.usage, title: a.title, turns: a.turns, storyId: a.id),
           IconButton(tooltip: 'Map', icon: const Icon(Icons.map_outlined), onPressed: () => openMapScreen(context, _ctl)),
           IconButton(tooltip: 'Journal', icon: const Icon(Icons.book_outlined), onPressed: () => showJournalSheet(context, _ctl)),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_horiz),
             onSelected: (v) {
               if (v == 'party') showPartySheet(context, _ctl);
-              if (v == 'layout') {
-                a.textMode = false;
-                _ctl.save();
-                Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => AdventureScreen(adventure: a)));
-              }
               if (v == 'help') _ctl.freeText('help');
               if (v == 'more') {
                 showAppSheet(context, builder: (ctx) => ListView(shrinkWrap: true, padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: adventureMenuRows(context, ctx, _ctl)));
               }
             },
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'more', child: Text('AI tools, people, gallery, export…')),
+              PopupMenuItem(value: 'more', child: Text('People, gallery, export…')),
               PopupMenuItem(value: 'party', child: Text('Party')),
               PopupMenuItem(value: 'help', child: Text('Commands')),
-              PopupMenuItem(value: 'layout', child: Text('Switch to standard layout')),
             ],
           ),
         ],
@@ -283,11 +277,11 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
             decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.border))),
             child: Row(children: [
               Expanded(
-                child: Text(
+                child: GestureDetector(onTap: () => showVitalsSheet(context, _ctl), child: Text(
                   '${h.name.split(' ').first} · HP ${h.hp}/${h.maxHp} · AC ${h.armorClass} · ${h.gold} gp',
                   style: _mono(color: h.hp / h.maxHp < 0.3 ? AppColors.danger : AppColors.textMuted, size: 12),
                   overflow: TextOverflow.ellipsis,
-                ),
+                )),
               ),
               const SizedBox(width: 12),
               Flexible(
@@ -320,7 +314,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
     final settings = context.watch<SettingsController>();
     final tail = <Widget>[
       if ((_ctl.streaming ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())),
-      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text('…', style: _mono(color: AppColors.textFaint))),
+      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: _ctl.adventure.log.isEmpty),
       if (_ctl.error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('error: ${_ctl.error}', style: _mono(color: AppColors.danger, size: 13))),
       if (a.finished) Padding(padding: const EdgeInsets.only(top: 16), child: Text(a.hero.dead ? '*** YOU HAVE DIED ***' : '*** THE END ***', style: _mono(color: a.hero.dead ? AppColors.danger : AppColors.accent))),
       if (a.finished) Padding(padding: const EdgeInsets.only(top: 12), child: FinishedActions(controller: _ctl)),
@@ -344,7 +338,9 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
     switch (e.kind) {
       case LogKind.narration:
       case LogKind.dialogue:
-        w = Padding(
+        w = GestureDetector(
+          onLongPress: () => showPassageSheet(context, _ctl, e),
+          child: Padding(
           padding: const EdgeInsets.only(top: 12, bottom: 2),
           child: TypewriterText(
             key: ValueKey(id),
@@ -354,6 +350,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
             onDone: () => _ctl.animated.add(id),
             style: _mono(),
           ),
+        ),
         );
       case LogKind.player:
         w = Padding(padding: const EdgeInsets.only(top: 14), child: Text('> ${e.text}', style: _mono(color: AppColors.accent)));
@@ -397,10 +394,10 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (_ctl.inCombat) _combatActions() else ...[
-          if (_ctl.adventure.choices.isNotEmpty)
-            TextButton.icon(onPressed: () => setState(() => _choicesCollapsed = !_choicesCollapsed),
-              icon: Icon(_choicesCollapsed ? Icons.expand_more : Icons.expand_less),
-              label: Text(_choicesCollapsed ? 'Show choices' : 'Hide choices')),
+          const NowReading(),
+          ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: _ctl.adventure.choices.isNotEmpty,
+            trailing: [IconButton(tooltip: 'Party', visualDensity: VisualDensity.compact, icon: const Icon(Icons.people_outline, size: 20), onPressed: () => showPartySheet(context, _ctl))],
+            onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed)),
           if (!_choicesCollapsed) _choiceActions(),
         ],
         if (_hint != null) Padding(padding: const EdgeInsets.only(top: 6, left: 4), child: Text(_hint!, style: _mono(color: AppColors.textFaint, size: 12))),
@@ -409,7 +406,8 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
           padding: const EdgeInsets.only(left: 12, right: 4),
           decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
           child: Row(children: [
-            Text('>', style: _mono(color: AppColors.accent, size: 16)),
+            IconButton(tooltip: 'Story tools', icon: const Icon(Icons.lightbulb_outline, size: 20),
+              onPressed: () => showStoryActions(context, _ctl)),
             const SizedBox(width: 10),
             Expanded(
               child: TextField(

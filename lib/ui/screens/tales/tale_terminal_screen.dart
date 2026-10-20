@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../widgets/ai_gate.dart';
 import '../../../art/scene_painter.dart';
 import '../../../game/tale_controller.dart';
 import '../../../models/adventure.dart';
@@ -13,12 +14,13 @@ import '../../../theme/ui.dart';
 import '../../widgets/media_view.dart';
 import '../../widgets/typewriter.dart';
 import '../../widgets/error_card.dart';
-import '../adventure/adventure_extras.dart' show UsageChip;
+import '../adventure/adventure_extras.dart' show ChoiceToolbar;
 import '../adventure/log_view.dart' show questOf, showQuestSheet;
 import '../adventure/map_screen.dart';
 import '../../../services/export.dart' show showStoryExport;
 import '../story/notes_screen.dart';
 import '../story/story_tools.dart';
+import '../story/story_extras.dart';
 import 'tale_tools.dart';
 import 'tales_hub.dart' show taleRoute;
 
@@ -46,6 +48,9 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkLocalAi(context);
+    });
     _audio = context.read<AudioService>();
     _ctl = createTaleController(context, widget.tale);
     for (final e in widget.tale.log) {
@@ -169,18 +174,14 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Text(t.title, style: T.h3(), overflow: TextOverflow.ellipsis),
+        title: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => showStoryOverview(context, _ctl), child: Text(t.title, style: T.h3(), overflow: TextOverflow.ellipsis)),
         actions: [
-          UsageChip(usage: t.usage, title: t.title, turns: t.turns, storyId: t.id),
           IconButton(tooltip: 'Map', icon: Badge(isLabelVisible: t.map != null, smallSize: 6, child: const Icon(Icons.map_outlined)), onPressed: () => openMapScreen(context, _ctl)),
           IconButton(tooltip: 'Journal', icon: const Icon(Icons.book_outlined), onPressed: () => showTaleJournal(context, _ctl)),
           IconButton(
             tooltip: 'More',
             icon: const Icon(Icons.more_horiz),
-            onPressed: () => showTaleMenu(context, _ctl, terminal: true, switchLayout: _switchLayout, restart: () async {
-              final fresh = await restartTale(context, _ctl.tale);
-              if (mounted) Navigator.of(this.context).pushReplacement(taleRoute(fresh));
-            }),
+            onPressed: () => showTaleMenu(context, _ctl),
           ),
           const SizedBox(width: 4),
         ],
@@ -226,7 +227,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
     final tail = <Widget>[
       for (final e in _echo) Padding(padding: const EdgeInsets.only(top: 8), child: Text('  $e', style: _mono(color: AppColors.info, size: 13))),
       if ((_ctl.streaming ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())),
-      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text('…', style: _mono(color: AppColors.textFaint))),
+      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: t.log.isEmpty),
       if (_ctl.error != null)
         InkWell(
           onTap: () => showIssueSheet(context, _ctl.error!, label: 'Story', onRetry: _ctl.isAi ? _ctl.retry : null),
@@ -275,15 +276,18 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
         final id = '${e.at.microsecondsSinceEpoch}';
         switch (e.kind) {
           case LogKind.narration:
-            return Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 2),
-              child: TypewriterText(
-                key: ValueKey(id),
-                text: e.text,
-                animate: s.typewriter && !_animated.contains(id),
-                speed: s.typeSpeed * 3,
-                onDone: () => _animated.add(id),
-                style: _mono(),
+            return GestureDetector(
+              onLongPress: () => showPassageSheet(context, _ctl, e),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 2),
+                child: TypewriterText(
+                  key: ValueKey(id),
+                  text: e.text,
+                  animate: s.typewriter && !_animated.contains(id),
+                  speed: s.typeSpeed * 3,
+                  onDone: () => _animated.add(id),
+                  style: _mono(),
+                ),
               ),
             );
           case LogKind.player:
@@ -349,10 +353,9 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (!t.finished && t.choices.isNotEmpty)
-          TextButton.icon(onPressed: () => setState(() => _choicesCollapsed = !_choicesCollapsed),
-            icon: Icon(_choicesCollapsed ? Icons.expand_more : Icons.expand_less),
-            label: Text(_choicesCollapsed ? 'Show choices' : 'Hide choices')),
+        const NowReading(),
+        ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: !t.finished && t.choices.isNotEmpty,
+          onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed)),
         if (!_choicesCollapsed && !_ctl.busy && !t.finished && t.choices.isNotEmpty)
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.3),
@@ -387,7 +390,8 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
           padding: const EdgeInsets.only(left: 12, right: 4),
           decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
           child: Row(children: [
-            Text('>', style: _mono(color: g.color, size: 16)),
+            IconButton(tooltip: 'Story tools', icon: const Icon(Icons.lightbulb_outline, size: 20),
+              onPressed: () => showStoryActions(context, _ctl)),
             const SizedBox(width: 10),
             Expanded(
               child: TextField(

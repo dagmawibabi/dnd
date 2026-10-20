@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../art/scene_painter.dart';
+import 'settings/profile_editor.dart' show AvatarPicker;
 import 'package:provider/provider.dart';
 
 import '../../data/tale_genres.dart';
@@ -26,6 +27,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _useAi = false;
   final _keyCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
+  final _bioCtrl = TextEditingController();
+  String? _avatar;
   bool _testing = false;
   bool? _keyOk;
   AiMode _aiMode = AiMode.text;
@@ -36,7 +39,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   /// 'dnd' or 'tales': what the home screen opens to.
   String _mode = 'dnd';
 
-  static const _steps = 8;
+  static const _steps = 9;
 
   /// Index of the storyteller (API key) step.
   static const _keyStep = 5;
@@ -54,6 +57,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void dispose() {
     _keyCtrl.dispose();
     _nameCtrl.dispose();
+    _bioCtrl.dispose();
     super.dispose();
   }
 
@@ -74,6 +78,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
       s.aiMode = _useAi ? _aiMode : AiMode.none;
       s.playerName = _nameCtrl.text.trim();
+      s.playerBio = _bioCtrl.text.trim();
+      s.playerAvatar = _avatar ?? '';
       s.homeMode = _mode;
       s.onboarded = true;
     });
@@ -105,6 +111,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       'Next',
       'Next',
       'Next',
+      'Continue',
       'Continue',
       'Continue',
       'Continue',
@@ -150,7 +157,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     opacity: anim,
                     child: SlideTransition(position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(anim), child: child),
                   ),
-                  child: KeyedSubtree(key: ValueKey(_step), child: [_welcome, _tourCharacters, _tourMedia, _tourTools, _modeStep, _storyteller, _preferences, _ready][_step]()),
+                  child: KeyedSubtree(key: ValueKey(_step), child: [_welcome, _tourCharacters, _tourMedia, _tourTools, _modeStep, _storyteller, _profile, _preferences, _ready][_step]()),
                 ),
               ),
               const SizedBox(height: 12),
@@ -357,7 +364,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         kicker: 'Your tools',
         title: 'Same tools, both modes',
         sub: 'D&D and text adventures share a journal, map, notes and AI helpers, plus tools that belong to each mode.',
-        demo: Wrap(spacing: 8, runSpacing: 8, children: [
+        demo: Wrap(spacing: 6, runSpacing: 2, children: [
           for (final (i, t) in const [
             (Icons.book_outlined, 'Journal'),
             (Icons.map_outlined, 'Map'),
@@ -368,7 +375,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             (Icons.toll_outlined, 'Cost tracking'),
             (Icons.text_fields, 'Fonts'),
           ])
-            Chip(avatar: Icon(i, size: 16), label: Text(t)),
+            Chip(
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+              avatar: Icon(i, size: 16), label: Text(t, style: T.small(color: AppColors.text))),
         ]),
         points: const [
           (Icons.history_edu_outlined, '"Previously on…"', 'Come back after a while and get a quick recap. Ask about the world without using a turn.'),
@@ -496,6 +506,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ]),
       );
 
+  // ----------------------------------------------------------------- profile
+
+  Widget _profile() {
+    return SingleChildScrollView(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Who\'s playing?', style: T.h1()),
+        const SizedBox(height: 8),
+        Text('Your profile shows your stats and stories. All optional, and it stays on this device.', style: T.bodyMuted()),
+        const SizedBox(height: 24),
+        AvatarPicker(path: _avatar, name: _nameCtrl.text, bio: _bioCtrl.text, onChanged: (p) => setState(() => _avatar = p)),
+        const SizedBox(height: 22),
+        TextField(controller: _nameCtrl, style: T.body(), textCapitalization: TextCapitalization.words, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'Your name')),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _bioCtrl,
+          style: T.body(),
+          minLines: 3,
+          maxLines: 5,
+          maxLength: 400,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(labelText: 'Bio', hintText: 'Favorite genres, the hero you always play…', alignLabelWithHint: true),
+        ),
+      ]),
+    );
+  }
+
   // ------------------------------------------------------------- preferences
 
   Widget _preferences() {
@@ -507,7 +543,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: 8),
         Text('Everything here can be changed later in Settings.', style: T.bodyMuted()),
         const SizedBox(height: 24),
-        TextField(controller: _nameCtrl, style: T.body(), decoration: const InputDecoration(labelText: 'What should we call you? (optional)')),
         if (_useAi) ...[
           const SectionLabel('Use AI for'),
           SegmentedButton<AiMode>(

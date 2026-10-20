@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../data/tale_genres.dart';
 import '../../game/story.dart';
 import '../../models/tale.dart';
+import '../../models/world.dart';
 import '../settings.dart';
 import 'gateway_client.dart';
 
@@ -136,7 +137,7 @@ String taleStateBlock(Tale t) => [
       if (t.goals.isNotEmpty) 'GOALS: ${t.goals.map((g) => '${g.title} [${g.status.name}]').join('; ')}',
       if (t.npcs.isNotEmpty) 'CHARACTERS: ${t.npcs.take(14).map((n) => '${n.name}${n.role.isEmpty ? '' : ' (${n.role})'}${n.alive ? '' : ' [dead]'}').join('; ')}',
       if (t.bondsPrompt(t.npcs).isNotEmpty) t.bondsPrompt(t.npcs),
-      if (t.canon.isNotEmpty) 'CANON (never contradict):\n${t.canon.reversed.take(24).map((c) => '- [${c.kind}] ${c.name}${c.text.isEmpty ? '' : ': ${c.text}'}').join('\n')}',
+      if (t.canon.isNotEmpty) 'CANON (never contradict):\n${relevantCanon(t.canon, '${t.scene.title} ${recentFocus(t.log)}', max: 20).map((c) => '- [${c.kind}] ${c.name}${c.text.isEmpty ? '' : ': ${c.text}'}').join('\n')}',
       if (t.scene.title.isNotEmpty) 'SCENE: ${t.scene.title}',
       if (t.memory.isNotEmpty) 'STORY SO FAR: ${t.memory}',
       'TURN: ${t.turns}',
@@ -182,14 +183,17 @@ Omit empty lists. When "ending" is set, write a final epilogue as the narration 
     final notes = List<String>.of(t.pendingNotes);
     if (notes.isNotEmpty) userTurn = 'Since your last reply (weave in naturally if relevant): ${notes.join(' ')}\n\n$userTurn';
     final client = GatewayClient(apiKey: settings.apiKey, target: t.usage);
-    final hist = t.aiHistory.length > 16 ? t.aiHistory.sublist(t.aiHistory.length - 16) : t.aiHistory;
+    // Cache-friendly: a fixed setup and the whole recent history first, the changing state last.
     final msgs = <ChatMessage>[
-      ChatMessage('system', _system(t)),
-      ChatMessage('user', 'STORY: "${t.title}"\n${taleStateBlock(t)}'),
+      ChatMessage('system', _system(t), cache: true),
+      ChatMessage('user', 'STORY: "${t.title}"${t.premise.isEmpty ? '' : ' — ${t.premise}'}\nPROTAGONIST: ${t.protagonist}'),
       const ChatMessage('assistant', '{"narration": "(Understood. I will narrate in JSON.)", "choices": []}'),
-      for (final h in hist) ChatMessage(h.startsWith('P:') ? 'user' : 'assistant', h.substring(2)),
-      ChatMessage('user', '$userTurn\n\n(Current state)\n${taleStateBlock(t)}\nRespond with the JSON object only.'),
+      for (final h in t.aiHistory) ChatMessage(h.startsWith('P:') ? 'user' : 'assistant', h.substring(2)),
     ];
+    final last = msgs.removeLast();
+    msgs
+      ..add(ChatMessage(last.role, last.content, cache: true))
+      ..add(ChatMessage('user', '$userTurn\n\n(Current state)\n${taleStateBlock(t)}\nRespond with the JSON object only.'));
     String raw;
     try {
       if (settings.streaming && onNarration != null) {

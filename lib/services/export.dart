@@ -22,7 +22,10 @@ import 'achievements.dart';
 import 'game_store.dart';
 import 'tale_store.dart';
 import 'image_service.dart';
+import 'settings.dart';
+import 'codex_art.dart';
 import 'usage.dart';
+import 'story_archive.dart';
 
 // ------------------------------------------------------------------ model
 
@@ -660,11 +663,11 @@ Future<bool> deliverFile(BuildContext context, {required String name, required U
   }
 }
 
-void showExportSheet(BuildContext context, Adventure a) => showExportFor(context, exportDocFromAdventure(a));
+void showExportSheet(BuildContext context, Adventure a) => showExportFor(context, exportDocFromAdventure(a), record: a);
 
-void showStoryExport(BuildContext context, StoryHost host) => showExportFor(context, exportDocFor(host));
+void showStoryExport(BuildContext context, StoryHost host) => showExportFor(context, exportDocFor(host), record: host.record, canSave: !host.busy);
 
-void showExportFor(BuildContext context, ExportDoc d) {
+void showExportFor(BuildContext context, ExportDoc d, {StoryRecord? record, bool canSave = true}) {
   final images = context.read<ImageService>();
   showAppSheet(context, builder: (ctx) {
     String? busy;
@@ -698,6 +701,23 @@ void showExportFor(BuildContext context, ExportDoc d) {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: RowGroup(children: [
+            if (record != null)
+              ListRow(
+                leading: const Icon(Icons.save_alt, size: 20),
+                title: 'Playable adventure',
+                subtitle: canSave ? 'JSON save with progress, notes and available artwork' : 'Wait for the current turn to finish',
+                onTap: !canSave ? null : () => run('Playable adventure', () async {
+                  final archive = await portableStoryArchive(record, images.bytesOf);
+                  if (!ctx.mounted) return;
+                  final ok = await deliverFile(ctx, name: '${_slug(d.title)}.adventure.json',
+                    bytes: Uint8List.fromList(utf8.encode(jsonEncode(archive))), mime: 'application/json');
+                  if (ok && ctx.mounted) {
+                    showToast(ctx, archive['missingMedia'] == 0
+                      ? 'Adventure saved. Import it from Home to continue.'
+                      : 'Adventure saved; ${archive['missingMedia']} unavailable media files could not be included.');
+                  }
+                }),
+              ),
             row(Icons.picture_as_pdf_outlined, 'PDF book', 'Illustrated, book-sized pages with a cover and cast list', 'pdf', 'application/pdf', () => storyPdf(d, images: images)),
             row(Icons.web_outlined, 'Interactive web page', 'Chapters, search, themes, art and your cast — opens in any browser', 'html', 'text/html', () async => Uint8List.fromList(utf8.encode(await storyHtml(d, images: images)))),
             row(Icons.description_outlined, 'Markdown', 'For notes apps, Obsidian or Notion', 'md', 'text/markdown', () async => Uint8List.fromList(utf8.encode(storyMarkdown(d)))),
@@ -719,12 +739,48 @@ void showExportFor(BuildContext context, ExportDoc d) {
 
 // ----------------------------------------------------------------- backup
 
+Future<StoryRecord?> importStory(BuildContext context) async {
+  final games = context.read<GameStore>();
+  final tales = context.read<TaleStore>();
+  final images = context.read<ImageService>();
+  try {
+    final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: ['json'], dialogTitle: 'Import playable adventure');
+    if (file == null) return null;
+    final archive = decodeStoryArchive(utf8.decode(await file.xFile.readAsBytes()));
+    final assets = archiveAssets(archive);
+    final paths = <String, String>{};
+    for (final e in assets.entries) {
+      paths[e.key] = await images.savePhoto(e.value.$2, ext: e.value.$1);
+    }
+    final record = restoreStoryArchive(archive, media: paths);
+    if (record is Adventure) {
+      await games.saveAdventure(record, syncHero: false);
+    } else {
+      await tales.save(record as Tale);
+    }
+    if (context.mounted) showToast(context, 'Adventure imported as a separate save');
+    return record;
+  } catch (e) {
+    if (context.mounted) showToast(context, 'Import failed: $e', icon: Icons.error_outline);
+    return null;
+  }
+}
+
 
 Future<void> exportBackup(BuildContext context) async {
   final store = context.read<GameStore>();
   final ach = context.read<Achievements>();
   final tales = context.read<TaleStore>();
-  final data = {...await store.backup(), 'tales': await tales.backup(), 'achievements': ach.toJson()};
+  final images = context.read<ImageService>();
+  final settings = context.read<SettingsController>();
+  final codex = context.read<CodexArt?>();
+  final data = {
+    ...await store.backup(),
+    'tales': await tales.backup(),
+    'achievements': ach.toJson(),
+    'profile': await profileBackup(settings, images),
+    if (codex != null) 'codexArt': await codexArtBackup(codex, images),
+  };
   final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
   final stamp = DateTime.now().toIso8601String().substring(0, 10);
   if (!context.mounted) return;
@@ -744,8 +800,62 @@ Future<void> importBackup(BuildContext context) async {
     final (c, a, cp) = await store.restore(j);
     if (j['tales'] is List && context.mounted) await context.read<TaleStore>().restore(j['tales'] as List);
     if (j['achievements'] is Map) ach.restore(Map<String, dynamic>.from(j['achievements']));
+    if (context.mounted) await restoreProfileAndArt(context, j);
     if (context.mounted) showToast(context, 'Restored $c heroes, $a adventures, $cp campaigns');
   } catch (e) {
     if (context.mounted) showToast(context, 'Import failed: $e', icon: Icons.error_outline);
+  }
+}
+
+
+// ------------------------------------------------- profile and codex art
+
+/// Images travel inside the backup as small PNGs.
+Future<String?> _packImage(String? path, ImageService images, int width) async {
+  if (path == null || path.isEmpty) return null;
+  final raw = await images.bytesOf(path);
+  if (raw == null) return null;
+  final png = await shrinkImage(raw, width);
+  return png == null ? null : base64Encode(png);
+}
+
+Future<Map<String, dynamic>> profileBackup(SettingsController s, ImageService images) async => {
+      'name': s.playerName,
+      'bio': s.playerBio,
+      'avatar': ?await _packImage(s.playerAvatar, images, 512),
+    };
+
+Future<Map<String, String>> codexArtBackup(CodexArt art, ImageService images) async {
+  final out = <String, String>{};
+  for (final e in art.paths.entries) {
+    final packed = await _packImage(e.value, images, 512);
+    if (packed != null) out[e.key] = packed;
+  }
+  return out;
+}
+
+/// Puts the profile and codex paintings from a backup back on this device.
+Future<void> restoreProfileAndArt(BuildContext context, Map<String, dynamic> j) async {
+  final images = context.read<ImageService>();
+  final settings = context.read<SettingsController>();
+  final codex = context.read<CodexArt?>();
+  final p = j['profile'];
+  if (p is Map) {
+    String? avatar;
+    if (p['avatar'] is String) avatar = await images.savePhoto(base64Decode(p['avatar'] as String), ext: 'png');
+    settings.update((s) {
+      if ((p['name'] ?? '').toString().isNotEmpty) s.playerName = p['name'].toString();
+      if ((p['bio'] ?? '').toString().isNotEmpty) s.playerBio = p['bio'].toString();
+      if (avatar != null) s.playerAvatar = avatar;
+    });
+  }
+  final art = j['codexArt'];
+  if (art is Map && codex != null) {
+    final restored = <String, String>{};
+    for (final e in art.entries) {
+      if (e.value is! String) continue;
+      restored[e.key.toString()] = await images.savePhoto(base64Decode(e.value as String), ext: 'png');
+    }
+    codex.restore(restored);
   }
 }

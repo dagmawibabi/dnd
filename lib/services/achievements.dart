@@ -51,6 +51,7 @@ class Stat {
   static const rolls = 'dice_rolls';
   static const tales = 'tales';
   static const talesFinished = 'tales_finished';
+  static const playSeconds = 'play_seconds';
 }
 
 const statLabels = <String, String>{

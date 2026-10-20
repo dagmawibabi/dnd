@@ -73,7 +73,6 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
   void initState() {
     super.initState();
     ctl.addListener(_refresh);
-    _tx.addListener(_refresh);
   }
 
   @override
@@ -199,8 +198,9 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   else
                     RepaintBoundary(child: CustomPaint(painter: MapBasePainter(state: m))),
                   AnimatedBuilder(
-                    animation: _pulse,
-                    builder: (_, _) => CustomPaint(painter: MapMarkerPainter(state: m, pulse: _pulse.value, selected: _selected, showLabels: _labels, scale: _scale)),
+                    // Pan and zoom repaint only the markers, never the whole screen.
+                    animation: Listenable.merge([_pulse, _tx]),
+                    builder: (_, _) => RepaintBoundary(child: CustomPaint(painter: MapMarkerPainter(state: m, pulse: _pulse.value, selected: _selected, showLabels: _labels, scale: _scale))),
                   ),
                 ]),
               ),

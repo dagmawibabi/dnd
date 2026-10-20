@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -211,7 +212,11 @@ class ModelCatalog extends ChangeNotifier {
   DateTime? fetchedAt;
   Map<String, ModelInfo> _byId = {};
 
-  List<ModelInfo> get textModels => models.where((m) => m.isText && !m.isVariant).toList();
+  /// Models served by LM Studio (fetched live, never cached).
+  List<ModelInfo> localModels = [];
+  String? localError;
+
+  List<ModelInfo> get textModels => [...localModels, ...models.where((m) => m.isText && !m.isVariant)];
   List<ModelInfo> get imageModels => models.where((m) => m.canMakeImages && !m.isVariant).toList();
   List<ModelInfo> get videoModels => models.where((m) => m.isVideo && m.textToVideo).toList();
   List<ModelInfo> get speechModels => models.where((m) => m.isSpeech).toList();
@@ -224,7 +229,7 @@ class ModelCatalog extends ChangeNotifier {
       };
 
   ModelInfo? byId(String id) {
-    if (_byId.length != models.length) _byId = {for (final m in models) m.id: m};
+    if (_byId.length != models.length + localModels.length) _byId = {for (final m in [...models, ...localModels]) m.id: m};
     return _byId[id];
   }
 
@@ -244,7 +249,40 @@ class ModelCatalog extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Reads the models LM Studio offers, if a server address is set.
+  Future<void> loadLocal() async {
+    if (GatewayClient.normalizeLmUrl(GatewayClient.lmStudioUrl).isEmpty) {
+      localModels = [];
+      localError = null;
+      _byId = {};
+      notifyListeners();
+      return;
+    }
+    try {
+      final ids = await GatewayClient.lmStudioModels(GatewayClient.lmStudioUrl);
+      localModels = [for (final id in ids) localModel(id)];
+      localError = null;
+    } catch (e) {
+      localError = e.toString();
+    }
+    _byId = {};
+    notifyListeners();
+  }
+
+  /// A free, local LM Studio model.
+  static ModelInfo localModel(String id) => ModelInfo(
+        id: '${AiRoute.lmPrefix}$id',
+        name: id.split('/').last,
+        provider: 'lm-studio',
+        type: 'language',
+        description: 'Runs on your own computer through LM Studio. Free and private.',
+        inputPrice: 0,
+        outputPrice: 0,
+        openWeights: true,
+      );
+
   Future<void> ensureLoaded() async {
+    if (localModels.isEmpty) unawaited(loadLocal());
     final stale = fetchedAt == null || DateTime.now().difference(fetchedAt!) > const Duration(days: 3);
     if (models.isEmpty || stale) await refresh();
   }
@@ -263,6 +301,7 @@ class ModelCatalog extends ChangeNotifier {
     loading = true;
     error = null;
     notifyListeners();
+    unawaited(loadLocal());
     try {
       final results = await Future.wait([_get(gatewayModelsUrl), _get(modelsDevUrl, timeout: const Duration(seconds: 60)), _get(openRouterModelsUrl), _get(openRouterVideoUrl)]);
       if (results[0] == null && results[2] == null) throw Exception('Could not reach the model lists. Check your connection.');

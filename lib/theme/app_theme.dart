@@ -232,10 +232,17 @@ ThemeData buildAppTheme({bool highContrast = false}) {
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: AppColors.bg,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: AppColors.surface3,
-      height: 64,
-      labelTextStyle: WidgetStateProperty.resolveWith((s) => T.caption(color: s.contains(WidgetState.selected) ? AppColors.text : AppColors.textFaint)),
-      iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(color: s.contains(WidgetState.selected) ? AppColors.text : AppColors.textFaint, size: 22)),
+      indicatorColor: AppColors.accentSoft,
+      indicatorShape: const StadiumBorder(),
+      height: 70,
+      elevation: 0,
+      labelPadding: const EdgeInsets.only(top: 2),
+      labelTextStyle: WidgetStateProperty.resolveWith((s) => T.caption(color: s.contains(WidgetState.selected) ? AppColors.text : AppColors.textFaint).copyWith(
+            fontSize: 11.5,
+            fontWeight: s.contains(WidgetState.selected) ? FontWeight.w600 : FontWeight.w500,
+            letterSpacing: 0.1,
+          )),
+      iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(color: s.contains(WidgetState.selected) ? AppColors.accent : AppColors.textFaint, size: 23)),
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: AppColors.bg,

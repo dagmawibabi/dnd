@@ -3,13 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../widgets/ai_gate.dart';
 import '../../../art/scene_painter.dart';
 import '../../../data/tale_genres.dart';
 import '../../../game/tale_controller.dart';
 import '../../../models/adventure.dart';
 import '../../../models/tale.dart';
 import '../../../services/audio/audio_service.dart';
-import '../../../services/narrator.dart';
 import '../../../services/settings.dart';
 import '../../../theme/ui.dart';
 import '../../../art/render_png.dart';
@@ -17,11 +17,12 @@ import '../../widgets/media_view.dart';
 import '../../widgets/typewriter.dart';
 import '../../widgets/error_card.dart';
 import '../../../services/image_service.dart';
-import '../adventure/adventure_extras.dart' show UsageChip;
+import '../adventure/adventure_extras.dart' show ChoiceToolbar;
 import '../adventure/log_view.dart';
 import '../adventure/map_screen.dart';
 import '../../../services/export.dart' show showStoryExport;
 import '../story/story_tools.dart';
+import '../story/story_extras.dart';
 import 'tale_tools.dart';
 import 'tales_hub.dart' show taleRoute;
 
@@ -47,6 +48,9 @@ class _TaleScreenState extends State<TaleScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkLocalAi(context);
+    });
     _audio = context.read<AudioService>();
     _ctl = createTaleController(context, widget.tale);
     for (final e in widget.tale.log) {
@@ -82,13 +86,6 @@ class _TaleScreenState extends State<TaleScreen> {
 
   TextStyle _reading(SettingsController s, {Color color = AppColors.text}) => T.reading(color: color);
 
-  Future<void> _switchLayout() async {
-    _ctl.tale.terminal = true;
-    await _ctl.flush();
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(taleRoute(_ctl.tale));
-  }
-
   Future<void> _playAgain() async {
     final fresh = await restartTale(context, _ctl.tale);
     if (!mounted) return;
@@ -103,19 +100,22 @@ class _TaleScreenState extends State<TaleScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(t.title, style: T.h3(), overflow: TextOverflow.ellipsis),
-          Row(children: [
-            Icon(g.icon, size: 12, color: g.color),
-            const SizedBox(width: 4),
-            Flexible(child: Text(t.scene.title.isNotEmpty ? t.scene.title : '${g.name}${_ctl.isAi ? ' · AI' : ''}', style: T.caption(color: g.color), overflow: TextOverflow.ellipsis)),
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => showStoryOverview(context, _ctl),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(t.title, style: T.h3(), overflow: TextOverflow.ellipsis),
+            Row(children: [
+              Icon(g.icon, size: 12, color: g.color),
+              const SizedBox(width: 4),
+              Flexible(child: Text(t.scene.title.isNotEmpty ? t.scene.title : '${g.name}${_ctl.isAi ? ' · AI' : ''}', style: T.caption(color: g.color), overflow: TextOverflow.ellipsis)),
+            ]),
           ]),
-        ]),
+        ),
         actions: [
-          UsageChip(usage: t.usage, title: t.title, turns: t.turns, storyId: t.id),
           IconButton(tooltip: 'Map', icon: Badge(isLabelVisible: t.map != null, smallSize: 6, child: const Icon(Icons.map_outlined)), onPressed: () => openMapScreen(context, _ctl)),
           IconButton(tooltip: 'Journal', icon: const Icon(Icons.book_outlined), onPressed: () => showTaleJournal(context, _ctl)),
-          IconButton(tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () => showTaleMenu(context, _ctl, terminal: false, switchLayout: _switchLayout, restart: _playAgain)),
+          IconButton(tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () => showTaleMenu(context, _ctl)),
           const SizedBox(width: 4),
         ],
         bottom: PreferredSize(preferredSize: const Size.fromHeight(1), child: Container(height: 1, color: AppColors.border)),
@@ -178,7 +178,7 @@ class _TaleScreenState extends State<TaleScreen> {
       itemBuilder: (ctx, i) {
         if (i == 0) {
           if ((_ctl.streaming ?? '').isNotEmpty) return Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: _reading(s)));
-          if (_ctl.busy) return Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: Text('…', style: T.h2(color: AppColors.textFaint)));
+          if (_ctl.busy) return ThinkingIndicator(first: t.log.isEmpty);
           if (_ctl.error != null) return ErrorCard(error: _ctl.error!, label: 'Story', onRetry: _ctl.isAi ? _ctl.retry : null);
           final imgErr = context.watch<ImageService>().errors.entries.where((e) => e.key.contains(t.id)).firstOrNull;
           if (imgErr != null) {
@@ -205,7 +205,7 @@ class _TaleScreenState extends State<TaleScreen> {
           case LogKind.narration:
             final anim = s.typewriter && !_animated.contains(id) && i <= 3;
             return GestureDetector(
-              onLongPress: () => context.read<Narrator>().speakNow(e.text),
+              onLongPress: () => showPassageSheet(context, _ctl, e),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -241,6 +241,7 @@ class _TaleScreenState extends State<TaleScreen> {
               onAnimated: () => _animated.add(id),
               onTalk: (npc) => showCharacterChat(context, _ctl, npc),
               onJournal: () => showTaleJournal(context, _ctl),
+              onPassage: (e) => showPassageSheet(context, _ctl, e),
             );
           case LogKind.loot:
             return Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text('+ ${e.text}', style: T.small(color: AppColors.success)));
@@ -307,12 +308,9 @@ class _TaleScreenState extends State<TaleScreen> {
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
       padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (t.choices.isNotEmpty)
-          TextButton.icon(
-            onPressed: () => setState(() => _choicesCollapsed = !_choicesCollapsed),
-            icon: Icon(_choicesCollapsed ? Icons.expand_more : Icons.expand_less),
-            label: Text(_choicesCollapsed ? 'Show ${t.choices.length} choices' : 'Hide choices'),
-          ),
+        const NowReading(),
+        ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: t.choices.isNotEmpty,
+          onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed)),
         if (!disabled && !_choicesCollapsed)
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.34),
@@ -344,7 +342,7 @@ class _TaleScreenState extends State<TaleScreen> {
           ),
         const SizedBox(height: 4),
         Row(children: [
-          CircleIconButton(icon: Icons.lightbulb_outline, size: 44, tooltip: 'AI tools: ideas, recap, lore', onPressed: () => showAiTools(context, _ctl)),
+          CircleIconButton(icon: Icons.lightbulb_outline, size: 44, tooltip: 'Story tools', onPressed: () => showStoryActions(context, _ctl)),
           const SizedBox(width: 8),
           if (_ctl.isAi) ...[
             Expanded(
