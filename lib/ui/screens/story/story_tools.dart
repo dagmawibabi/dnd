@@ -31,10 +31,16 @@ import '../../../art/render_png.dart';
 import '../../../models/character.dart' show PortraitSpec;
 import '../adventure/map_screen.dart' show MapPreview;
 import 'notes_screen.dart';
+import 'world_memory_screen.dart';
+import '../adventure/camp_screen.dart';
 import '../settings/settings_screen.dart';
 import '../../widgets/error_card.dart';
 import '../../widgets/portrait.dart';
 import '../adventure/adventure_extras.dart' show showStoryUsage;
+import '../../widgets/voice_input_button.dart';
+import '../../widgets/media_import.dart';
+import '../../../game/approaches.dart';
+import 'chapter_recap_screen.dart';
 
 const romanceColor = Color(0xFFF472B6);
 
@@ -144,7 +150,11 @@ class PeopleTab extends StatelessWidget {
                   BondBars(bond: host.world.bondFor(n), compact: true),
                 ]),
               ),
-              IconButton(tooltip: 'Talk to ${n.name}', icon: const Icon(Icons.chat_bubble_outline, size: 20), onPressed: () => showCharacterChat(context, host, n)),
+              IconButton(
+                tooltip: 'Talk to ${n.name}',
+                icon: Badge(isLabelVisible: host.world.unreadChats.contains(n.id), smallSize: 8, backgroundColor: AppColors.accent, child: const Icon(Icons.chat_bubble_outline, size: 20)),
+                onPressed: () => showCharacterChat(context, host, n),
+              ),
             ]),
           ),
         ),
@@ -330,6 +340,12 @@ class _ChatState extends State<_Chat> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => readChat(widget.host, widget.npc));
+  }
+
+  @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
@@ -425,6 +441,8 @@ class _ChatState extends State<_Chat> {
                   child: Row(children: [
                     Expanded(child: TextField(controller: _ctrl, style: T.body(), textInputAction: TextInputAction.send, decoration: InputDecoration(hintText: 'Message $first'), onSubmitted: (_) => _send())),
                     const SizedBox(width: 8),
+                    VoiceInputButton(controller: _ctrl, onSubmit: _send, enabled: !_busy),
+                    if (settings.voiceInput) const SizedBox(width: 8),
                     CircleIconButton(icon: Icons.arrow_upward, size: 44, tooltip: 'Send', onPressed: _busy ? null : _send),
                   ]),
                 ),
@@ -441,6 +459,15 @@ class _ChatState extends State<_Chat> {
     return Align(
       alignment: me ? Alignment.centerRight : Alignment.centerLeft,
       child: Column(crossAxisAlignment: me ? CrossAxisAlignment.end : CrossAxisAlignment.start, children: [
+        if (l.opener.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.waving_hand_outlined, size: 13, color: AppColors.accent),
+              const SizedBox(width: 6),
+              Flexible(child: Text('${widget.npc.name.split(' ').first} came to you · ${l.opener}', style: T.caption(color: AppColors.accent))),
+            ]),
+          ),
         GestureDetector(
           onLongPress: () {
             Clipboard.setData(ClipboardData(text: l.text));
@@ -1065,6 +1092,66 @@ class _RecapBannerState extends State<RecapBanner> {
   }
 }
 
+// -------------------------------------------------------------- approaches
+
+/// "Mira wants to talk": shown above the input when someone starts a
+/// conversation on their own.
+class ApproachBanner extends StatelessWidget {
+  const ApproachBanner({super.key, required this.host, this.mono = false});
+  final StoryHost host;
+  final bool mono;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: host,
+      builder: (context, _) {
+        final hit = latestApproach(host);
+        if (hit == null) return const SizedBox.shrink();
+        final (npc, line) = hit;
+        final more = host.world.unreadChats.length - 1;
+        return FadeIn(
+          key: ValueKey('${npc.id}${line.at.microsecondsSinceEpoch}'),
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(mono ? 8 : 14),
+              border: Border.all(color: AppColors.accent.withValues(alpha: 0.45)),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(mono ? 8 : 14),
+              onTap: () => showCharacterChat(context, host, npc),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                child: Row(children: [
+                  NpcPortrait(npc: npc, size: 38),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${npc.name.split(' ').first} wants to talk${more > 0 ? ' · +$more more' : ''}'.toUpperCase(), style: T.overline(color: AppColors.accent)),
+                      const SizedBox(height: 2),
+                      if (line.opener.isNotEmpty) Text(line.opener, style: T.caption(), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text('"${line.text}"', style: T.small(color: AppColors.text), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    ]),
+                  ),
+                  TextButton(onPressed: () => showCharacterChat(context, host, npc), child: const Text('Reply')),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Later',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => readChat(host, npc),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 // ------------------------------------------------------------------- menu
 
 /// Menu rows every story shares (AI tools, people, gallery, memory, export…).
@@ -1077,11 +1164,15 @@ List<Widget> storyMenuRows(BuildContext context, BuildContext sheetContext, Stor
 
   return [
     RowGroup(children: [
+      if (host is AdventureController) ListRow(leading: const Icon(Icons.local_fire_department_outlined, size: 20), title: 'Camp & companions', subtitle: 'Downtime, personal quests and decisions', onTap: () => go(() => Navigator.push(context, MaterialPageRoute(builder: (_) => CampScreen(controller: host))))),
+      ListRow(leading: const Icon(Icons.public, size: 20), title: 'World memory', subtitle: '${host.world.chronicle.facts.length} facts · consequences across chapters', onTap: () => go(() => Navigator.push(context, MaterialPageRoute(builder: (_) => WorldMemoryScreen(world: () => host.world.chronicle, listenable: host, onChanged: () { host.refresh(); host.save(); }, chapterId: host.storyId, chapterTitle: host.storyTitle, turn: host.turns))))),
+      ListRow(leading: const Icon(Icons.compare_arrows, size: 20), title: 'What changed', subtitle: 'This chapter: the world, relationships, companions and quests', onTap: () => go(() => openChapterRecap(context, host))),
       ListRow(leading: const Icon(Icons.forum_outlined, size: 20), title: 'People & relationships', subtitle: '${host.people.length} met · talk to anyone', onTap: () => go(() => showStoryJournal(context, host, initial: 'People'))),
       ListRow(leading: const Icon(Icons.photo_library_outlined, size: 20), title: 'Gallery', subtitle: 'Art, portraits and maps · save any to your phone', onTap: () => go(() => showStoryJournal(context, host, initial: 'Gallery'))),
       ListRow(leading: const Icon(Icons.psychology_alt_outlined, size: 20), title: 'Memory', subtitle: '${host.canon.length} facts remembered', onTap: () => go(() => showStoryJournal(context, host, initial: 'Memory'))),
       ListRow(leading: const Icon(Icons.text_fields, size: 20), title: 'Text & font', subtitle: '${_fontLabels[settings.readingFont] ?? 'Serif'} · ${(settings.readingScale * 100).round()}%', onTap: () => go(() => showTextStyleSheet(context))),
       ListRow(leading: const Icon(Icons.ios_share, size: 20), title: 'Export', subtitle: 'PDF, web page, Markdown or text', onTap: () => go(() => showStoryExport(context, host))),
+      ListRow(leading: const Icon(Icons.add_photo_alternate_outlined, size: 20), title: 'Use my picture for this scene', subtitle: 'From your gallery or files', onTap: () => go(() => useOwnSceneImage(context, host))),
       if (settings.useAiImages) ListRow(leading: const Icon(Icons.brush_outlined, size: 20), title: 'Paint this scene', onTap: () => go(host.paintScene)),
       if (settings.useAiVideo) ListRow(leading: const Icon(Icons.movie_outlined, size: 20), title: 'Film this scene', subtitle: '${settings.videoDuration}s clip · ${settings.videoResolution}', onTap: () => go(host.filmScene)),
       ListRow(
@@ -1105,6 +1196,26 @@ List<Widget> storyMenuRows(BuildContext context, BuildContext sheetContext, Stor
         ),
     ]),
   ];
+}
+
+/// Shows one of the player's own pictures for the current scene.
+Future<void> useOwnSceneImage(BuildContext context, StoryHost host) async {
+  final picked = await chooseImages(context, title: 'A picture for ${host.scene.title.isEmpty ? 'this scene' : host.scene.title}');
+  if (picked.isEmpty) return;
+  final path = picked.first.path;
+  final r = host.record;
+  final title = host.scene.title;
+  if (r is Adventure) {
+    r.sceneImagePath = path;
+    if (title.isNotEmpty) r.sceneImages[title] = path;
+  } else if (r is Tale) {
+    r.sceneImagePath = path;
+    if (title.isNotEmpty) r.sceneImages[title] = path;
+  }
+  host.world.addMedia(MediaItem(path: path, kind: 'scene', caption: title, turn: host.turns));
+  host.refresh();
+  host.save();
+  if (context.mounted) showToast(context, 'Your picture now shows for this scene');
 }
 
 /// The scene backdrop for a story, AI art or procedural.

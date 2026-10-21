@@ -19,6 +19,8 @@ import '../../widgets/dice.dart';
 import '../adventure/sheets.dart' show showOracleSheet;
 import 'notes_screen.dart';
 import 'story_tools.dart';
+import 'world_memory_screen.dart';
+import '../adventure/camp_screen.dart';
 
 String fmtDuration(int seconds) {
   if (seconds < 60) return '${seconds}s';
@@ -403,6 +405,8 @@ Future<void> showStoryActions(BuildContext context, StoryHost host) => showAppSh
               ListRow(leading: const Icon(Icons.sticky_note_2_outlined, size: 20), title: 'Notes', subtitle: 'Your story notebook', onTap: () => go(() => openNotes(context, host))),
               ListRow(leading: const Icon(Icons.casino_outlined, size: 20), title: 'Roll a die', subtitle: 'Any die, no strings attached', onTap: () => go(() => showQuickRoll(context))),
               if (dnd != null) ...[
+                ListRow(leading: const Icon(Icons.local_fire_department_outlined, size: 20), title: 'Camp & companions', subtitle: 'Downtime and personal quests', onTap: () => go(() => Navigator.push(context, MaterialPageRoute(builder: (_) => CampScreen(controller: dnd))))),
+                ListRow(leading: const Icon(Icons.public, size: 20), title: 'World memory', subtitle: 'Browse the consequences of your actions', onTap: () => go(() => Navigator.push(context, MaterialPageRoute(builder: (_) => WorldMemoryScreen(world: () => dnd.adventure.chronicle, listenable: dnd, onChanged: () { dnd.refresh(); dnd.save(); }, chapterId: dnd.storyId, chapterTitle: dnd.storyTitle, turn: dnd.turns))))),
                 ListRow(leading: const Icon(Icons.help_outline, size: 20), title: 'Ask the oracle', subtitle: 'Yes/no questions to fate · chaos ${dnd.adventure.chaos}', onTap: () => go(() => showOracleFor(context, dnd))),
                 ListRow(
                   leading: const Icon(Icons.undo, size: 20),
@@ -418,7 +422,6 @@ Future<void> showStoryActions(BuildContext context, StoryHost host) => showAppSh
               ],
               if (host.canRegenerate)
                 ListRow(leading: const Icon(Icons.refresh, size: 20), title: 'Regenerate last turn', subtitle: 'Ask the storyteller to write it again', onTap: () => go(host.regenerate)),
-              ListRow(leading: const Icon(Icons.text_fields, size: 20), title: 'Text & font', onTap: () => go(() => showTextStyleSheet(context))),
               ListRow(leading: const Icon(Icons.insights_outlined, size: 20), title: 'Story overview', subtitle: 'Stats and setup', onTap: () => go(() => showStoryOverview(context, host))),
             ]),
             const SizedBox(height: 12),

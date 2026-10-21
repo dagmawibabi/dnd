@@ -8,6 +8,10 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <!-- Saving AI images and videos to the gallery (only needed on Android 9 and older). -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <!-- Speaking your actions and messages instead of typing them. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Voice input is optional; devices without a microphone can still install the app. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
         android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="true"
@@ -52,6 +56,10 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Lets speech_to_text find the device's speech recognizer on Android 11+. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
         <!-- Lets flutter_tts find the device's text-to-speech engines on Android 11+. -->
         <intent>

@@ -25,6 +25,7 @@ import 'sheets.dart';
 import '../story/notes_screen.dart';
 import '../story/story_tools.dart';
 import '../story/story_extras.dart';
+import '../../widgets/voice_input_button.dart';
 
 /// Minimal, classic text-adventure presentation of the same game.
 class TextAdventureScreen extends StatefulWidget {
@@ -302,6 +303,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
           maxWidth: 760,
           child: Column(children: [
             Expanded(child: _feed()),
+            ApproachBanner(host: _ctl, mono: true),
             _actions(),
           ]),
         ),
@@ -427,6 +429,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
                 onSubmitted: (_) => _submit(),
               ),
             ),
+            VoiceInputButton(controller: _input, onSubmit: _submit, flat: true),
             IconButton(icon: const Icon(Icons.keyboard_return, size: 18), onPressed: _submit),
           ]),
         ),

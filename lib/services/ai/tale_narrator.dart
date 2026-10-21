@@ -137,6 +137,7 @@ String taleStateBlock(Tale t) => [
       if (t.goals.isNotEmpty) 'GOALS: ${t.goals.map((g) => '${g.title} [${g.status.name}]').join('; ')}',
       if (t.npcs.isNotEmpty) 'CHARACTERS: ${t.npcs.take(14).map((n) => '${n.name}${n.role.isEmpty ? '' : ' (${n.role})'}${n.alive ? '' : ' [dead]'}').join('; ')}',
       if (t.bondsPrompt(t.npcs).isNotEmpty) t.bondsPrompt(t.npcs),
+      t.chronicle.prompt(focus: '${t.scene.title} ${recentFocus(t.log)}'),
       if (t.canon.isNotEmpty) 'CANON (never contradict):\n${relevantCanon(t.canon, '${t.scene.title} ${recentFocus(t.log)}', max: 20).map((c) => '- [${c.kind}] ${c.name}${c.text.isEmpty ? '' : ': ${c.text}'}').join('\n')}',
       if (t.scene.title.isNotEmpty) 'SCENE: ${t.scene.title}',
       if (t.memory.isNotEmpty) 'STORY SO FAR: ${t.memory}',

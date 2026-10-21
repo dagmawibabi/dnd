@@ -8,6 +8,7 @@ import '../widgets/portrait.dart';
 import 'adventure/campaign_flow.dart';
 import 'adventure/sheets.dart' show editTextDialog;
 import 'home_screen.dart' show openAdventure;
+import 'story/world_memory_screen.dart';
 
 class CampaignScreen extends StatelessWidget {
   const CampaignScreen({super.key, required this.campaignId});
@@ -79,6 +80,7 @@ class CampaignScreen extends StatelessWidget {
               },
             ),
           const SectionLabel('Chapters'),
+          ListRow(leading: const Icon(Icons.public), title: 'World memory', subtitle: '${camp.chronicle.facts.length} facts · ${camp.chronicle.history.length} consequences', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WorldMemoryScreen(world: () => camp.chronicle, listenable: store)))),
           RowGroup(children: [
             for (final (i, (id, s)) in chapters.indexed)
               ListRow(

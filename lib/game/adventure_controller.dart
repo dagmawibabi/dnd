@@ -22,6 +22,8 @@ import '../services/narrator.dart';
 import '../services/settings.dart';
 import '../services/usage.dart';
 import 'combat.dart';
+import 'approaches.dart';
+import 'campaign_world.dart';
 import 'dice.dart';
 import 'module_engine.dart';
 import 'offline_engine.dart';
@@ -62,6 +64,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     narrator?.usageTarget = adventure.usage;
     _imageSettings = _imageSettingsKey;
     settings.addListener(_imagesSettingsChanged);
+    seedCompanionArcs(adventure);
   }
 
   Adventure adventure;
@@ -779,6 +782,23 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     _checkLevelUp();
     _notify();
     save();
+    unawaited(_maybeApproach());
+  }
+
+  bool _approaching = false;
+
+  /// A companion or friend may come to the player about what just happened.
+  Future<void> _maybeApproach({bool atCamp = false}) async {
+    if (_approaching || _disposed || !settings.companionApproaches || inCombat || hero.dead || adventure.finished) return;
+    final a = pickApproach(this, close: {for (final c in adventure.companions) c.id}, atCamp: atCamp);
+    if (a == null) return;
+    _approaching = true;
+    try {
+      await deliverApproach(this, a, ai: storyAi);
+      if (!_disposed) audio.play('chime');
+    } finally {
+      _approaching = false;
+    }
   }
 
   Choice? _pendingShop;
@@ -892,13 +912,27 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     save();
   }
 
-  int _lastDowntimeTurn = -1;
-  bool get canDowntime => !inCombat && !busy && _lastDowntimeTurn != adventure.turns;
+  bool get canDowntime => !inCombat && !busy && pendingRoll == null && !hero.dead &&
+      (adventure.chronicle.lastActivityChapter != adventure.id || adventure.chronicle.lastActivityTurn != adventure.turns);
+
+  void _spendDowntime(String activity, String result) {
+    adventure.chronicle.lastActivityChapter = adventure.id;
+    adventure.chronicle.lastActivityTurn = adventure.turns;
+    adventure.chronicle.day++;
+    rememberWorld(adventure, 'camp', 'Last camp activity', 'Day ${adventure.chronicle.day}: $result', '${hero.name} chose $activity at ${adventure.scene.title}.');
+  }
 
   /// Spend a little time in town. Returns a short result for the UI.
   String downtime(String activity) {
     if (!canDowntime) return 'You have already spent this stretch of time. Continue the story first.';
-    _lastDowntimeTurn = adventure.turns;
+    if (!const {'work', 'carouse', 'train', 'craft', 'research'}.contains(activity)) return 'Choose a camp activity.';
+    if (const {'work', 'carouse', 'research'}.contains(activity) &&
+        !const {'town', 'tavern', 'temple', 'castle'}.contains(adventure.scene.location)) {
+      return 'Visit a town, tavern, temple or castle for this activity.';
+    }
+    if (activity == 'craft' && hero.gold < 25) return 'You need 25 gp of herbs and glass.';
+    if (activity == 'carouse' && hero.gold < 5) return 'You need 5 gp to carouse.';
+    _takeSnapshot();
     final r = Rng.unseeded();
     String out;
     switch (activity) {
@@ -944,6 +978,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
       default:
         return 'Nothing happens.';
     }
+    _spendDowntime(activity, out);
     _sys(out, kind: LogKind.loot, meta: {
       'details': {
         'title': 'Downtime',
@@ -957,10 +992,72 @@ class AdventureController extends ChangeNotifier implements StoryHost {
     audio.play('page');
     _notify();
     save();
+    unawaited(_maybeApproach(atCamp: true));
     return out;
   }
 
   // ------------------------------------------------------------ loyalty
+
+  /// A camp conversation is useful offline too, and can unlock a personal quest.
+  String spendTimeWith(Character c) {
+    if (!canDowntime || !adventure.companions.contains(c) || c.dead) return 'Continue the story before spending more time at camp.';
+    _takeSnapshot();
+    _changeLoyalty(c, 5, 'You made time to listen at camp.');
+    final person = adventure.personNamed(c.name);
+    if (person != null) _bond(person, friendship: 5, reason: 'Time together at camp');
+    seedCompanionArcs(adventure);
+    final result = 'You listen to ${c.name}. +5 loyalty and +5 friendship.';
+    _spendDowntime('Time with ${c.name}', result);
+    _note(result);
+    _notify();
+    save();
+    unawaited(_maybeApproach(atCamp: true));
+    return result;
+  }
+
+  /// A small off-screen expedition supports personal arcs in every story mode.
+  String pursueCompanionLead(Character c) {
+    final arc = adventure.chronicle.arcs[c.id];
+    if (!canDowntime || !adventure.companions.contains(c) || c.dead || arc == null || arc.ended || arc.stage == 'choice') return 'There is no available lead right now.';
+    _takeSnapshot();
+    final roll = rollD20(modifier: math.max(hero.skillMod(Skill.investigation), hero.skillMod(Skill.survival)), dc: 12);
+    arc.stage = 'pursuing';
+    if (roll.success) arc.progress = (arc.progress + 1).clamp(0, 2);
+    final result = roll.success
+        ? 'You and ${c.name} follow a lead toward ${arc.title} (${roll.total} vs DC 12). ${arc.progress}/2 leads secured.'
+        : 'You and ${c.name} follow a false trail (${roll.total} vs DC 12). The day is spent, but the quest remains open.';
+    if (arc.progress >= 2) arc.stage = 'choice';
+    rememberWorld(adventure, 'companion', c.name, '${arc.title}: ${arc.stage}, ${arc.progress}/2 leads.', result);
+    _spendDowntime('Pursue ${arc.title}', result);
+    _sys(result, kind: LogKind.roll);
+    _note(result);
+    _notify();
+    save();
+    return result;
+  }
+
+  String resolveCompanionArc(Character c, {required bool fulfill}) {
+    final arc = adventure.chronicle.arcs[c.id];
+    if (busy || inCombat || pendingRoll != null || hero.dead || !adventure.companions.contains(c) || c.dead || arc == null || arc.stage != 'choice' || arc.rewarded) return 'This companion is not ready for a decision.';
+    _takeSnapshot();
+    arc.stage = 'resolved';
+    arc.rewarded = true;
+    arc.outcome = fulfill
+        ? 'You stood beside ${c.name} and fulfilled their goal: ${arc.description} They gained Inspiration and 10 loyalty.'
+        : 'You helped ${c.name} leave ${arc.title} behind and choose a new path. Both of you gained Inspiration; loyalty rose by 5.';
+    c.inspiration = true;
+    if (!fulfill) hero.inspiration = true;
+    _changeLoyalty(c, fulfill ? 10 : 5, arc.outcome);
+    final q = adventure.quests.where((q) => q.title == arc.title).firstOrNull;
+    if (q != null) { q.status = QuestStatus.completed; q.description = arc.outcome; }
+    rememberWorld(adventure, 'companion', c.name, arc.outcome, 'Your decision at the end of ${arc.title}.');
+    rememberWorld(adventure, 'quest', arc.title, 'Completed. ${arc.outcome}', 'A companion story reached its conclusion.');
+    _sys(arc.outcome, kind: LogKind.levelup);
+    _note(arc.outcome);
+    _notify();
+    save();
+    return arc.outcome;
+  }
 
   void _changeLoyalty(Character c, int change, String reason) {
     if (change == 0) return;
@@ -990,11 +1087,13 @@ class AdventureController extends ChangeNotifier implements StoryHost {
       _sys('New companion quest: ${q.$1}', kind: LogKind.levelup);
       audio.play('quest');
     }
+    seedCompanionArcs(adventure);
     if (c.loyalty >= 80 && before < 80) {
       _sys('${c.name} is now devoted to you.', kind: LogKind.levelup);
       audio.play('chime');
     }
     if (c.loyalty < 15 && adventure.companions.contains(c) && !inCombat) {
+      rememberDeparture(adventure, c, 'Lost faith in the hero.');
       adventure.companions.remove(c);
       _note('${c.name} lost faith in the hero and left the party.');
       adventure.log.add(LogEntry(kind: LogKind.companion, speaker: c.name, text: 'I can\'t follow you any more. Good luck — you\'ll need it.'));
@@ -1006,7 +1105,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
   void _offlineApproval(Choice c) {
     if (adventure.companions.isEmpty) return;
     final r = Rng(stableHash('${c.text}${adventure.turns}'));
-    for (final comp in adventure.companions) {
+    for (final comp in List<Character>.of(adventure.companions)) {
       final cls = comp.classLevels.keys.first;
       final likes = switch (cls) {
         'paladin' || 'cleric' => {ChoiceType.dialogue, ChoiceType.rest},
@@ -1219,9 +1318,30 @@ class AdventureController extends ChangeNotifier implements StoryHost {
         adventure.remember('npc', c.name, 'Companion: ${c.raceLabel} ${c.classSummary}. ${c.personality}');
         _sys('${c.name} joins your party! (${c.raceLabel} ${c.classSummary})', kind: LogKind.levelup);
         audio.play('quest');
+        // Handcrafted stories can give a companion their personal quest up front.
+        final personal = (e['personal_quest'] ?? '').toString().trim();
+        if (personal.isNotEmpty) {
+          c.personalQuest = personal;
+          final desc = (e['quest_description'] ?? '').toString();
+          if (desc.isNotEmpty && !adventure.quests.any((q) => q.title == personal)) adventure.quests.add(Quest(id: newId(), title: personal, description: desc));
+          seedCompanionArcs(adventure);
+          // The story introduces this quest itself; companions shouldn't raise it again unprompted.
+          final arc = adventure.chronicle.arcs[c.id];
+          if (arc != null) adventure.approachTopics['arc:${c.id}:${arc.stage}:${arc.progress}'] = adventure.turns;
+        }
+      case 'approach':
+        // A scripted "someone comes to talk to you" moment.
+        final who = adventure.personNamed((e['name'] ?? '').toString());
+        final text = (e['text'] ?? '').toString();
+        if (who != null && text.isNotEmpty && settings.companionApproaches) {
+          final label = (e['label'] ?? 'A private word').toString();
+          unawaited(deliverApproach(this, Approach(person: who, topic: 'story:${adventure.id}:${who.id}:$label', why: text, label: label, fallback: text)));
+          audio.play('chime');
+        }
       case 'companion_leave':
         final c = _target(e['name']);
         if (c != null && c != hero) {
+          rememberDeparture(adventure, c, (e['reason'] ?? 'Chose to leave the party.').toString());
           adventure.companions.remove(c);
           _sys('${c.name} leaves the party.');
         }
@@ -1259,6 +1379,18 @@ class AdventureController extends ChangeNotifier implements StoryHost {
           _sys('Quest failed: $title', kind: LogKind.levelup, meta: {'quest': {'title': title, 'desc': q.description, 'state': 'failed'}});
         } else if (status == 'update' && (e['description'] ?? '').toString().isNotEmpty) {
           _sys('Quest updated: $title', kind: LogKind.levelup, meta: {'quest': {'title': title, 'desc': q.description, 'state': 'update'}});
+        }
+        rememberWorld(adventure, 'quest', q.title, '${q.status.name}: ${q.description}', 'Quest $status in the story.');
+        seedCompanionArcs(adventure);
+        syncCompanionQuest(adventure, q);
+      case 'world':
+        final kind = (e['kind'] ?? 'fact').toString();
+        if (const {'faction', 'place', 'promise', 'fact', 'clue'}.contains(kind)) {
+          final name = (e['name'] ?? '').toString();
+          final state = (e['state'] ?? '').toString();
+          if (rememberWorld(adventure, kind, name, state, (e['reason'] ?? 'A consequence of the story.').toString(), reputation: n('reputation').toInt())) {
+            _sys('World changed · $name: $state', meta: {'world': true});
+          }
         }
       case 'condition':
         final t = _target(e['target']) ?? hero;
@@ -1372,6 +1504,7 @@ class AdventureController extends ChangeNotifier implements StoryHost {
 
   /// Rests from the menu. Returns a message when the rest could not happen.
   String? restFromMenu({required bool long}) {
+    if (busy || pendingRoll != null || adventure.finished || hero.dead) return 'You cannot rest right now.';
     if (inCombat) return 'You can\'t rest during a fight.';
     if (long && turnsUntilLongRest > 0) return 'You rested recently. Press on for $turnsUntilLongRest more turns before making camp again.';
     _takeSnapshot();

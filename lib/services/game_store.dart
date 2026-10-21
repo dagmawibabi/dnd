@@ -137,6 +137,14 @@ class GameStore extends ChangeNotifier {
     _remember(a);
     final s = AdventureSummary.of(a);
     await _db?.putAdventure(a.id, a.toJson(), s.toJson(), a.updatedAt);
+    // Only the newest chapter owns the live campaign world. Viewing or saving
+    // an older chapter must never roll it back.
+    final camp = campaign(a.campaignId);
+    if (camp != null && camp.chapters.isNotEmpty && camp.chapters.last == a.id) {
+      camp.worldFromJson(jsonDecode(jsonEncode(a.worldToJson())) as Map<String, dynamic>);
+      camp.canon = [for (final c in a.canon) CanonEntry.fromJson(c.toJson())];
+      await _saveCampaigns();
+    }
     final i = adventures.indexWhere((x) => x.id == a.id);
     if (i >= 0) {
       adventures[i] = s;

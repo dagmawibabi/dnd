@@ -158,7 +158,11 @@ Map<String, (String, Uint8List)> archiveAssets(Map<String, dynamic> archive) {
 
 StoryRecord restoreStoryArchive(Map<String, dynamic> archive, {Map<String, String> media = const {}}) {
   final state = Map<String, dynamic>.from(remapArchive(archive['state'], media) as Map);
+  final sourceId = state['id'];
   state['id'] = newId();
+  // Import creates a new identity, but must not grant another downtime action.
+  final chronicle = state['chronicle'];
+  if (chronicle is Map && chronicle['lastChapter'] == sourceId) chronicle['lastChapter'] = state['id'];
   if (archive['kind'] == 'tale') return Tale.fromJson(state);
   // A standalone adventure must not attach to an unrelated local campaign/hero.
   state['campaign'] = null;

@@ -17,9 +17,11 @@ import '../game/story_host.dart';
 import '../models/adventure.dart';
 import '../models/tale.dart';
 import '../models/world.dart';
+import '../models/chronicle.dart';
 import '../theme/ui.dart';
 import 'achievements.dart';
 import 'game_store.dart';
+import 'studio.dart';
 import 'tale_store.dart';
 import 'image_service.dart';
 import 'settings.dart';
@@ -33,7 +35,8 @@ String _slug(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')
 
 /// A character in an export, with how they feel about the protagonist.
 class ExportPerson {
-  ExportPerson({required this.name, this.role = '', this.description = '', this.portrait, this.bond});
+  ExportPerson({required this.name, this.id = '', this.voice = '', this.role = '', this.description = '', this.portrait, this.bond});
+  final String id, voice;
   final String name;
   final String role;
   final String description;
@@ -65,7 +68,17 @@ class ExportDoc {
     this.accent = const Color(0xFF8B7CF6),
     this.ending = '',
     this.notes = const [],
+    this.chronicle,
+    this.chats = const {},
+    this.storyId = '',
+    this.turns = 0,
+    this.map,
   });
+  final MapState? map;
+  final Chronicle? chronicle;
+  final Map<String, List<ChatLine>> chats;
+  final String storyId;
+  final int turns;
   final List<StoryNote> notes;
   final String title;
   final String kind;
@@ -95,6 +108,11 @@ ExportDoc exportDocFromAdventure(Adventure a) {
   final h = a.hero;
   return ExportDoc(
     title: a.title,
+    chronicle: a.chronicle,
+    chats: a.chats,
+    storyId: a.id,
+    turns: a.turns,
+    map: a.map,
     kind: 'A D&D adventure',
     byline: '${h.name} · level ${h.level} ${h.raceLabel} ${h.classSummary} · ${a.setting}',
     premise: a.premise,
@@ -104,7 +122,7 @@ ExportDoc exportDocFromAdventure(Adventure a) {
     heroStory: [h.appearance, h.backstory].where((s) => s.trim().isNotEmpty).join('\n\n'),
     log: a.log,
     sceneImages: a.sceneImages,
-    people: [for (final n in a.people) ExportPerson(name: n.name, role: n.role, description: n.description, portrait: n.portrait.aiImagePath, bond: a.bonds[n.id])],
+    people: [for (final n in a.people) ExportPerson(id: n.id, name: n.name, voice: a.voices[n.id] ?? '', role: n.role, description: n.description, portrait: n.portrait.aiImagePath, bond: a.bonds[n.id])],
     canon: a.canon,
     quests: a.quests,
     inventory: [for (final i in h.inventory) i.qty > 1 ? '${i.name} ×${i.qty}' : i.name],
@@ -120,13 +138,18 @@ ExportDoc exportDocFromTale(Tale t) {
   final g = genreById(t.genre);
   return ExportDoc(
     title: t.title,
+    chronicle: t.chronicle,
+    chats: t.chats,
+    storyId: t.id,
+    turns: t.turns,
+    map: t.map,
     kind: 'A ${g.name.toLowerCase()} story',
     byline: '${t.protagonist == 'You' ? 'You' : t.protagonist} · ${g.name}${t.engine == TaleEngine.ai ? ' · told with AI' : ''}',
     premise: t.premise,
     summary: t.memory,
     log: t.log,
     sceneImages: t.sceneImages,
-    people: [for (final n in t.npcs) ExportPerson(name: n.name, role: n.role, description: n.description, portrait: n.portrait.aiImagePath, bond: t.bonds[n.id])],
+    people: [for (final n in t.npcs) ExportPerson(id: n.id, name: n.name, voice: t.voices[n.id] ?? '', role: n.role, description: n.description, portrait: n.portrait.aiImagePath, bond: t.bonds[n.id])],
     canon: t.canon,
     quests: t.goals,
     questLabel: 'Goals',
@@ -146,6 +169,44 @@ ExportDoc exportDocFor(StoryHost host) {
 }
 
 // ------------------------------------------------------------------- text
+
+/// Shared appendices keep every reading format aligned with playable saves.
+List<(String, List<String>)> storyWorldSections(ExportDoc d) {
+  final w = d.chronicle;
+  return [
+    if (w != null && w.facts.isNotEmpty) ('World memory', [
+      for (final f in w.facts) '[${f.kind}${f.pinned ? ', pinned' : ''}] ${f.name}: ${w.describe(f)}',
+    ]),
+    if (w != null && w.history.isNotEmpty) ('World consequences', [
+      for (final h in w.history) '${h.name} [${h.kind}]\n${h.chapterTitle} · turn ${h.turn} · day ${h.day}\nBefore: ${h.before.isEmpty ? 'Not recorded' : h.before}\nAfter: ${h.after}\nBecause: ${h.reason}',
+    ]),
+    if (w != null && w.arcs.isNotEmpty) ('Companion stories', [
+      for (final a in w.arcs.values) '${a.name}: ${a.title}\nStage: ${a.stage} · leads ${a.progress}/2\n${a.description}\n${a.outcome.isEmpty ? 'Outcome: unresolved' : 'Outcome: ${a.outcome}'}\nRewards granted: ${a.rewarded ? 'yes' : 'no'}',
+    ]),
+    if (w != null) ('Camp & downtime', [
+      'World day: ${w.day}',
+      if (w.lastActivityTurn >= 0) 'Last activity: turn ${w.lastActivityTurn} · ${w.lastActivityChapter == d.storyId ? d.title : w.lastActivityChapter}',
+      'Activity used this turn: ${w.lastActivityChapter == d.storyId && w.lastActivityTurn == d.turns ? 'yes' : 'no'}',
+    ]),
+    if (d.people.any((p) => p.bond != null || p.voice.isNotEmpty)) ('Relationship history', [
+      for (final p in d.people) ...[
+        if (p.bond case final b?) '${p.name}: ${b.label}\nFriendship: ${b.friendship}/100 · romance: ${b.romance}/100\nRomance declined: ${b.romanceClosed ? 'yes' : 'no'}',
+        if (p.voice.isNotEmpty) '${p.name} - voice: ${p.voice}',
+        for (final m in p.bond?.moments ?? <BondMoment>[]) '${p.name} · turn ${m.turn} · ${m.at.toIso8601String()}\n${m.text} (friendship ${m.friendship}, romance ${m.romance})',
+      ],
+    ]),
+    if (d.chats.values.any((v) => v.isNotEmpty)) ('Private conversations', [
+      for (final e in d.chats.entries) if (e.value.isNotEmpty) ...[
+        'Conversation with ${d.people.where((p) => p.id == e.key).firstOrNull?.name ?? e.key}',
+        for (final l in e.value) '${l.at.toIso8601String()} · ${l.fromPlayer ? 'You' : d.people.where((p) => p.id == e.key).firstOrNull?.name ?? e.key}${l.opener.isEmpty ? '' : ' (came to you: ${l.opener})'}: ${l.text}',
+      ],
+    ]),
+    if (d.map case final m? when m.pins.isNotEmpty || m.locations.any((l) => l.note.isNotEmpty)) ('Map notes: ${m.name}', [
+      for (final l in m.locations) if (l.note.isNotEmpty) '${l.name}: ${l.note}',
+      for (final p in m.pins) 'Pin · ${p.label.isEmpty ? 'Unnamed' : p.label}${p.note.isEmpty ? '' : ': ${p.note}'}',
+    ]),
+  ];
+}
 
 /// The story as Markdown.
 String storyMarkdown(ExportDoc d) {
@@ -204,6 +265,10 @@ String storyMarkdown(ExportDoc d) {
           b.writeln('- ♥ ${e.text}');
         }
     }
+  }
+  for (final (title, entries) in storyWorldSections(d)) {
+    b..writeln()..writeln('## $title')..writeln();
+    for (final entry in entries) { b..writeln(entry)..writeln(); }
   }
   if (d.quests.isNotEmpty) {
     b
@@ -507,6 +572,9 @@ Future<String> storyHtml(ExportDoc d, {ImageService? images}) async {
     html.writeln('<details><summary>${_esc(d.questLabel)} (${d.quests.length})</summary><ul>${d.quests.map((q) => '<li>${q.status == QuestStatus.completed ? '✓' : q.status == QuestStatus.failed ? '✗' : '○'} <b>${_esc(q.title)}</b>${q.description.isEmpty ? '' : ' — ${_esc(q.description)}'}</li>').join()}</ul></details>');
   }
   if (d.inventory.isNotEmpty) html.writeln('<details><summary>Inventory (${d.inventory.length})</summary><p>${d.inventory.map(_esc).join(' · ')}</p></details>');
+  for (final (title, entries) in storyWorldSections(d)) {
+    html.writeln('<details class="world-export" open><summary>${_esc(title)}</summary>${entries.map((e) => '<p style="white-space:pre-wrap">${_esc(e)}</p>').join()}</details>');
+  }
   if (d.summary.isNotEmpty) html.writeln('<details><summary>The story so far</summary><p>${_esc(d.summary)}</p></details>');
   if (d.notes.isNotEmpty) {
     html.writeln('<details open><summary>My notes (${d.notes.length})</summary>${d.notes.map((n) => '<h3 style="margin:14px 0 4px;font-size:16px">${_esc(n.heading)}</h3><p style="white-space:pre-wrap;margin:0">${_esc(n.body.trim())}</p>').join()}</details>');
@@ -642,7 +710,38 @@ Future<Uint8List> storyPdf(ExportDoc d, {ImageService? images}) async {
       ],
     ));
   }
+  final sections = storyWorldSections(d);
+  if (sections.isNotEmpty) {
+    doc.addPage(pw.MultiPage(
+      pageFormat: format,
+      maxPages: 20 + sections.fold<int>(0, (n, s) => n + s.$2.fold<int>(0, (m, e) => m + (e.length / 700).ceil() + 1)),
+      margin: const pw.EdgeInsets.fromLTRB(36, 36, 36, 40),
+      header: (_) => pw.Text(d.title, style: st(7.5, color: muted)),
+      footer: (ctx) => pw.Center(child: pw.Text('${ctx.pageNumber}', style: st(8, color: muted))),
+      build: (_) => [
+        for (final (title, entries) in sections) ...[
+          pw.Header(level: 1, child: pw.Text(title, style: st(16))),
+          for (final entry in entries)
+            for (final chunk in _pdfParagraphs(entry)) pw.Padding(padding: const pw.EdgeInsets.only(bottom: 7), child: pw.Text(chunk, style: st(9))),
+        ],
+      ],
+    ));
+  }
   return doc.save();
+}
+
+/// Bound individual widgets so long memories and chats can cross page breaks.
+Iterable<String> _pdfParagraphs(String text) sync* {
+  for (final line in text.split('\n')) {
+    var remaining = line;
+    while (remaining.length > 700) {
+      var split = remaining.lastIndexOf(' ', 700);
+      if (split < 1) split = 700;
+      yield remaining.substring(0, split);
+      remaining = remaining.substring(split).trimLeft();
+    }
+    if (remaining.isNotEmpty) yield remaining;
+  }
 }
 
 // ----------------------------------------------------------------- output
@@ -698,6 +797,7 @@ void showExportFor(BuildContext context, ExportDoc d, {StoryRecord? record, bool
 
       return ListView(shrinkWrap: true, padding: const EdgeInsets.only(bottom: 24), children: [
         SheetTitle('Export', subtitle: '${d.title} · ${d.log.length} entries · ${d.words} words'),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 12), child: Text('Includes world memory, companion stories, camp progress and private conversations.', style: T.small())),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: RowGroup(children: [
@@ -721,7 +821,7 @@ void showExportFor(BuildContext context, ExportDoc d, {StoryRecord? record, bool
             row(Icons.picture_as_pdf_outlined, 'PDF book', 'Illustrated, book-sized pages with a cover and cast list', 'pdf', 'application/pdf', () => storyPdf(d, images: images)),
             row(Icons.web_outlined, 'Interactive web page', 'Chapters, search, themes, art and your cast — opens in any browser', 'html', 'text/html', () async => Uint8List.fromList(utf8.encode(await storyHtml(d, images: images)))),
             row(Icons.description_outlined, 'Markdown', 'For notes apps, Obsidian or Notion', 'md', 'text/markdown', () async => Uint8List.fromList(utf8.encode(storyMarkdown(d)))),
-            row(Icons.notes, 'Plain text', 'Just the story', 'txt', 'text/plain', () async => Uint8List.fromList(utf8.encode(storyText(d)))),
+            row(Icons.notes, 'Plain text', 'Story, world history, companions and conversations', 'txt', 'text/plain', () async => Uint8List.fromList(utf8.encode(storyText(d)))),
             ListRow(
               leading: const Icon(Icons.copy_outlined, size: 20),
               title: 'Copy to clipboard',
@@ -774,12 +874,14 @@ Future<void> exportBackup(BuildContext context) async {
   final images = context.read<ImageService>();
   final settings = context.read<SettingsController>();
   final codex = context.read<CodexArt?>();
+  final studio = context.read<StudioStore?>();
   final data = {
     ...await store.backup(),
     'tales': await tales.backup(),
     'achievements': ach.toJson(),
     'profile': await profileBackup(settings, images),
     if (codex != null) 'codexArt': await codexArtBackup(codex, images),
+    if (studio != null && !studio.isEmpty) 'studio': studio.toJson(),
   };
   final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
   final stamp = DateTime.now().toIso8601String().substring(0, 10);
@@ -800,6 +902,7 @@ Future<void> importBackup(BuildContext context) async {
     final (c, a, cp) = await store.restore(j);
     if (j['tales'] is List && context.mounted) await context.read<TaleStore>().restore(j['tales'] as List);
     if (j['achievements'] is Map) ach.restore(Map<String, dynamic>.from(j['achievements']));
+    if (j['studio'] is Map && context.mounted) context.read<StudioStore?>()?.restore(Map<String, dynamic>.from(j['studio']));
     if (context.mounted) await restoreProfileAndArt(context, j);
     if (context.mounted) showToast(context, 'Restored $c heroes, $a adventures, $cp campaigns');
   } catch (e) {

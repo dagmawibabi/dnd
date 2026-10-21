@@ -10,12 +10,16 @@ import '../../../services/db/database.dart';
 import '../../../services/export.dart';
 import '../../../services/narrator.dart';
 import '../../../services/settings.dart';
+import '../../../services/studio.dart';
 import '../../../services/usage.dart';
 import '../../../theme/ui.dart';
 import '../achievements_screen.dart';
 import '../adventure/adventure_extras.dart';
 import 'model_picker.dart';
 import 'profile_card.dart';
+import '../studio/art_studio.dart';
+import '../studio/music_studio.dart';
+import '../studio/sfx_studio.dart';
 import '../story/story_tools.dart' show ReadingControls;
 
 String _modelSub(ModelCatalog cat, String id) {
@@ -114,6 +118,7 @@ class SettingsScreen extends StatelessWidget {
         RowGroup(children: [
           _SwitchRow(title: 'Hardcore by default', subtitle: 'Permadeath, no rewind, riskier rests', value: s.defaultHardcore, onChanged: (v) => s.update((s) => s.defaultHardcore = v)),
           _SwitchRow(title: 'Show DCs', subtitle: 'Reveal difficulty numbers on checks', value: s.defaultShowDcs, onChanged: (v) => s.update((s) => s.defaultShowDcs = v)),
+          _SwitchRow(title: 'Companions start conversations', subtitle: 'Friends and companions come to you about quests, big changes and how they feel', value: s.companionApproaches, onChanged: (v) => s.update((s) => s.companionApproaches = v)),
         ]),
         const SectionLabel('Sound'),
         RowGroup(children: [
@@ -127,6 +132,28 @@ class SettingsScreen extends StatelessWidget {
           }),
           _SliderRow(title: 'Ambience volume', value: s.ambienceVolume, min: 0, max: 1, label: '${(s.ambienceVolume * 100).round()}%', onChanged: (v) => s.update((s) => s.ambienceVolume = v)),
         ]),
+        const SectionLabel('Studio'),
+        Builder(builder: (context) {
+          final studio = context.watch<StudioStore?>();
+          Widget studioRow(IconData icon, String title, String subtitle, Widget page) => ListRow(
+                leading: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(10)),
+                  child: Icon(icon, size: 18, color: AppColors.accent),
+                ),
+                title: title,
+                subtitle: subtitle,
+                trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page)),
+              );
+          String count(int n, String one, String many) => n == 0 ? '' : ' · $n ${n == 1 ? one : many}';
+          return RowGroup(children: [
+            studioRow(Icons.palette_outlined, 'Procedural art', 'Scenes, portraits, creatures and maps painted on device${count(studio?.art.length ?? 0, 'kept piece', 'kept pieces')}', const ArtStudioScreen()),
+            studioRow(Icons.music_note_outlined, 'Music', 'Hear every theme, compose loops, choose what plays${count(studio?.tracks.length ?? 0, 'track', 'tracks')}', const MusicStudioScreen()),
+            studioRow(Icons.graphic_eq, 'Sound effects', 'Sample, tune and replace game sounds, or design your own${count(studio?.sounds.length ?? 0, 'sound', 'sounds')}', const SfxStudioScreen()),
+          ]);
+        }),
         const SectionLabel('Reading'),
         RowGroup(children: [
           const Padding(padding: EdgeInsets.fromLTRB(16, 14, 16, 10), child: ReadingControls(preview: false)),
@@ -150,7 +177,7 @@ class SettingsScreen extends StatelessWidget {
         ]),
         const SectionLabel('Data'),
         RowGroup(children: [
-          ListRow(leading: const Icon(Icons.upload_file_outlined, size: 20), title: 'Export backup', subtitle: 'Heroes, stories, campaigns, achievements, your profile and codex art', onTap: () => exportBackup(context)),
+          ListRow(leading: const Icon(Icons.upload_file_outlined, size: 20), title: 'Export backup', subtitle: 'Heroes, stories, campaigns, achievements, your profile, codex art and studio creations', onTap: () => exportBackup(context)),
           ListRow(leading: const Icon(Icons.download_outlined, size: 20), title: 'Import backup', subtitle: 'Merge a DnD backup file into this device', onTap: () => importBackup(context)),
           ListRow(title: 'Show onboarding again', onTap: () => s.update((s) => s.onboarded = false)),
           ListRow(
@@ -718,6 +745,11 @@ class _VoicePage extends StatelessWidget {
         ),
         _SwitchRow(title: 'Distinct character voices', subtitle: 'Everyone sounds different from the narrator', value: s.npcVoices, onChanged: (v) => s.update((s) => s.npcVoices = v)),
         _SwitchRow(title: 'Speak chat replies', subtitle: 'Characters answer out loud in conversations', value: s.speakChatReplies, onChanged: (v) => s.update((s) => s.speakChatReplies = v)),
+      ]),
+      const SectionLabel('Voice input'),
+      RowGroup(children: [
+        _SwitchRow(title: 'Speak instead of typing', subtitle: 'A microphone button next to story and chat inputs. What you say is transcribed into the box so you can check it.', value: s.voiceInput, onChanged: (v) => s.update((s) => s.voiceInput = v)),
+        _SwitchRow(title: 'Send when you stop speaking', subtitle: 'Off: review the transcript, then tap send', value: s.voiceAutoSend, onChanged: s.voiceInput ? (v) => s.update((s) => s.voiceAutoSend = v) : null),
       ]),
       const SectionLabel('Voice engine'),
       Padding(

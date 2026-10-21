@@ -112,8 +112,11 @@ class AppButton extends StatelessWidget {
 
 /// Round icon button on a subtle surface.
 class CircleIconButton extends StatelessWidget {
-  const CircleIconButton({super.key, required this.icon, required this.onPressed, this.tooltip, this.badge = false, this.busy = false, this.size = 40});
+  const CircleIconButton({super.key, required this.icon, required this.onPressed, this.tooltip, this.badge = false, this.busy = false, this.size = 40, this.color});
   final bool busy;
+
+  /// Icon colour, for a button showing an active state.
+  final Color? color;
   final IconData icon;
   final VoidCallback? onPressed;
   final String? tooltip;
@@ -133,7 +136,7 @@ class CircleIconButton extends StatelessWidget {
           onTap: busy ? null : onPressed,
           child: Center(child: busy
               ? SizedBox.square(dimension: size * 0.48, child: const CircularProgressIndicator(strokeWidth: 2))
-              : Badge(isLabelVisible: badge, smallSize: 7, child: Icon(icon, size: size * 0.48, color: onPressed == null ? AppColors.textFaint : AppColors.text))),
+              : Badge(isLabelVisible: badge, smallSize: 7, child: Icon(icon, size: size * 0.48, color: onPressed == null ? AppColors.textFaint : (color ?? AppColors.text)))),
         ),
       ),
     );

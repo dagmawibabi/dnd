@@ -330,18 +330,45 @@ class CombatState {
 enum MapKind { dungeon, overworld, town }
 
 class MapLocation {
-  MapLocation({required this.name, this.type = 'place', this.visited = false});
+  MapLocation({required this.name, this.type = 'place', this.visited = false, this.note = ''});
   String name;
   String type;
   bool visited;
 
-  Map<String, dynamic> toJson() => {'n': name, 'ty': type, 'v': visited};
-  factory MapLocation.fromJson(Map<String, dynamic> j) => MapLocation(name: j['n'] ?? '?', type: j['ty'] ?? 'place', visited: j['v'] ?? false);
+  /// The player's own note about this place.
+  String note;
+
+  Map<String, dynamic> toJson() => {'n': name, 'ty': type, 'v': visited, if (note.isNotEmpty) 'no': note};
+  factory MapLocation.fromJson(Map<String, dynamic> j) => MapLocation(name: j['n'] ?? '?', type: j['ty'] ?? 'place', visited: j['v'] ?? false, note: j['no'] ?? '');
+}
+
+/// A marker the player drops on the map, positioned as a fraction of its size.
+class MapPin {
+  MapPin({String? id, required this.x, required this.y, this.label = '', this.note = '', this.icon = 0, this.color = 0}) : id = id ?? newId();
+  final String id;
+  double x, y;
+  String label;
+  String note;
+
+  /// Index into the map screen's pin icons and colours.
+  int icon, color;
+
+  Map<String, dynamic> toJson() => {'id': id, 'x': x, 'y': y, 'l': label, if (note.isNotEmpty) 'n': note, 'i': icon, 'c': color};
+  factory MapPin.fromJson(Map<String, dynamic> j) => MapPin(
+        id: j['id'],
+        x: ((j['x'] ?? 0.5) as num).toDouble(),
+        y: ((j['y'] ?? 0.5) as num).toDouble(),
+        label: j['l'] ?? '',
+        note: j['n'] ?? '',
+        icon: j['i'] ?? 0,
+        color: j['c'] ?? 0,
+      );
 }
 
 class MapState {
-  MapState({required this.kind, required this.seed, required this.name, List<MapLocation>? locations, this.current = 0, this.aiImagePath})
-      : locations = locations ?? [];
+  MapState({required this.kind, required this.seed, required this.name, List<MapLocation>? locations, this.current = 0, this.aiImagePath, List<MapPin>? pins})
+      : locations = locations ?? [],
+        pins = pins ?? [];
   MapKind kind;
   int seed;
   String name;
@@ -349,7 +376,10 @@ class MapState {
   int current;
   String? aiImagePath;
 
-  Map<String, dynamic> toJson() => {'k': kind.name, 'seed': seed, 'name': name, 'locs': locations.map((l) => l.toJson()).toList(), 'cur': current, 'ai': aiImagePath};
+  /// The player's own markers.
+  List<MapPin> pins;
+
+  Map<String, dynamic> toJson() => {'k': kind.name, 'seed': seed, 'name': name, 'locs': locations.map((l) => l.toJson()).toList(), 'cur': current, 'ai': aiImagePath, if (pins.isNotEmpty) 'pins': pins.map((p) => p.toJson()).toList()};
   factory MapState.fromJson(Map<String, dynamic> j) => MapState(
         kind: MapKind.values.firstWhere((k) => k.name == j['k'], orElse: () => MapKind.dungeon),
         seed: j['seed'] ?? 1,
@@ -357,6 +387,7 @@ class MapState {
         locations: [for (final l in (j['locs'] as List? ?? [])) MapLocation.fromJson(Map<String, dynamic>.from(l))],
         current: j['cur'] ?? 0,
         aiImagePath: j['ai'],
+        pins: [for (final p in (j['pins'] as List? ?? [])) MapPin.fromJson(Map<String, dynamic>.from(p))],
       );
 }
 
@@ -499,6 +530,7 @@ class Adventure with WorldData implements StoryRecord {
   /// Adds or updates a canon entry by name.
   void remember(String kind, String name, String text) {
     if (name.trim().isEmpty) return;
+    chronicle.record(kind: kind, name: name, state: text, reason: 'Established in the story.', chapter: id, chapterTitle: title, turn: turns);
     final e = canonNamed(name);
     if (e == null) {
       canon.add(CanonEntry(id: newId(), kind: kind, name: name.trim(), text: text.trim(), turn: turns));

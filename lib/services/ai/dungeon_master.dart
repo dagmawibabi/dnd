@@ -30,6 +30,8 @@ YOUR CRAFT
 - The app handles dice. Never ask the player to roll in prose; put checks on choices instead.
 - Use ability checks for things the hero attempts, and saving throws for dangers they resist: put {"ability": "DEX", "save": true, "dc": 14} on a choice, or emit a "save" event for traps, spells and hazards (the app rolls it and applies damage/conditions). Give conditions a "turns" duration when they should wear off.
 - CANON is the source of truth. Never contradict it. When something durable happens (a named NPC, a place, a promise, a clue, a secret, an important item), add it to "memory".
+- WORLD MEMORY describes current state and supersedes outdated CANON or narration. Make consequences visible in dialogue, access to places, faction reactions and future choices. Emit a world event only when something actually changes; include the player's action as the reason. Never reset reputation or resurrect destroyed places without an explained event.
+- COMPANION ARCS persist between chapters. Build scenes around their personal quests. Use quest events with the exact personal quest title to update, complete or fail them. The app handles the final camp decision and rewards: do not grant those twice. Respect departures and resolved outcomes.
 - Companions have personalities and loyalty. After choices they care about, add "approval" changes (positive when the hero acts in line with their values, negative otherwise). High-loyalty companions open up and may reveal their personal quest; low-loyalty companions argue and may leave.
 - RELATIONSHIPS are personal: friendship and romance are tracked separately for every companion and NPC. When the hero's words or deeds move someone, emit a "relationship" event (small steps: ±2-8, bigger only for big moments). Romance grows only if the hero pursues it and it suits the character; characters may decline. Let established relationships show in how people speak and act (a partner worries, a rival needles). ${s.matureContent ? 'Romance can be passionate but never explicit.' : 'Romance stays PG-13: flirting, confessions, a kiss.'}
 
@@ -40,6 +42,7 @@ OUTPUT FORMAT — respond with ONE JSON object and nothing else:
   "scene": {"title": "short place name", "location_type": "$_locationTypes", "time": "dawn|day|dusk|night", "mood": "calm|tense|mystery|combat|triumph|sad|eerie|festive", "weather": "clear|rain|storm|snow|fog|wind", "image_prompt": "one-sentence visual description of the scene for an illustrator"},
   "choices": [{"text": "short imperative option", "type": "action|dialogue|explore|combat|stealth|magic|rest", "check": {"ability": "STR|DEX|CON|INT|WIS|CHA", "skill": "Stealth", "dc": 13, "save": false} or null}],
   "events": [ ...zero or more of:
+    {"type": "world", "kind": "faction|place|promise|fact|clue", "name": "Redhollow", "state": "Safe again; the villagers offer shelter", "reason": "The hero drove out the raiders", "reputation": 0},
     {"type": "damage", "target": "hero|<companion name>", "amount": 4, "reason": "falling rocks"},
     {"type": "heal", "target": "hero", "amount": 5},
     {"type": "item", "action": "add|remove", "name": "Silver Key", "description": "...", "qty": 1},
@@ -97,6 +100,7 @@ String _stateBlock(Adventure a, {String focus = ''}) {
   }
   final bonds = a.bondsPrompt(a.people);
   if (bonds.isNotEmpty) b.writeln(bonds);
+  b.writeln(a.chronicle.prompt(focus: '$focus ${a.scene.title} ${recentFocus(a.log)}'));
   b.writeln('SCENE: ${a.scene.title} (${a.scene.location}, ${a.scene.time}, ${a.scene.mood}). Turn ${a.turns}.');
   if (a.memory.isNotEmpty) b.writeln('STORY SO FAR: ${a.memory}');
   return b.toString();
@@ -206,7 +210,7 @@ class AiDungeonMaster {
         messages: [
           ChatMessage('system',
               'You role-play ${npc.name}, a ${npc.role} in a ${a.setting} D&D world. ${npc.description} Current attitude toward the hero: ${npc.attitude} (${npc.disposition}/100). Notes: ${npc.notes}. Speak in character, 1-3 sentences, never break character. Reply ONLY JSON: {"reply": "...", "disposition_change": -10..10, "note": "optional short fact to remember"}'),
-          ChatMessage('user', 'Context: ${a.scene.title}. Hero: ${a.hero.name}, ${a.hero.raceLabel} ${a.hero.classSummary}.\n$transcript\n${a.hero.name}: $line'),
+          ChatMessage('user', 'Context: ${a.scene.title}. Hero: ${a.hero.name}, ${a.hero.raceLabel} ${a.hero.classSummary}.\n${a.chronicle.prompt(focus: '${npc.name} $line')}\n$transcript\n${a.hero.name}: $line'),
         ],
       );
       final j = extractJsonObject(raw);

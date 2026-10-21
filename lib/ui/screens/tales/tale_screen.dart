@@ -25,6 +25,8 @@ import '../story/story_tools.dart';
 import '../story/story_extras.dart';
 import 'tale_tools.dart';
 import 'tales_hub.dart' show taleRoute;
+import '../../widgets/voice_input_button.dart';
+import '../story/chapter_recap_screen.dart';
 
 /// Reading and playing a text adventure (book layout).
 class TaleScreen extends StatefulWidget {
@@ -126,6 +128,7 @@ class _TaleScreenState extends State<TaleScreen> {
           ContentWidth(maxWidth: 720, child: TaleStatusBar(ctl: _ctl)),
           ContentWidth(maxWidth: 720, child: RecapBanner(host: _ctl, lastPlayed: _lastPlayed)),
           Expanded(child: ContentWidth(maxWidth: 720, child: _feed(s, g))),
+          ContentWidth(maxWidth: 720, child: ApproachBanner(host: _ctl)),
           ContentWidth(maxWidth: 720, child: _bottom(s, g)),
         ]),
       ),
@@ -294,6 +297,8 @@ class _TaleScreenState extends State<TaleScreen> {
             Expanded(child: AppButton(label: 'Export', icon: Icons.ios_share, kind: ButtonKind.secondary, onPressed: () => showStoryExport(context, _ctl))),
           ]),
           const SizedBox(height: 8),
+          AppButton(label: 'What changed', icon: Icons.compare_arrows, kind: ButtonKind.secondary, onPressed: () => openChapterRecap(context, _ctl, ended: true)),
+          const SizedBox(height: 8),
           AppButton(label: 'More stories', onPressed: () => Navigator.pop(context)),
         ]),
       ),
@@ -361,6 +366,8 @@ class _TaleScreenState extends State<TaleScreen> {
               ),
             ),
             const SizedBox(width: 8),
+            VoiceInputButton(controller: _input, onSubmit: _send, enabled: !disabled),
+            if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
             CircleIconButton(icon: Icons.arrow_upward, size: 44, tooltip: 'Send', onPressed: disabled ? null : _send),
           ] else
             Expanded(child: Text('Handcrafted story · tap a choice', style: T.caption())),

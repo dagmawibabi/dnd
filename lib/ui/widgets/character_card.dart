@@ -99,6 +99,9 @@ String characterCardText(Character c) => [
       'HP ${c.maxHp} · AC ${c.armorClass} · Speed ${c.speed}',
       Ability.values.map((a) => '${a.short} ${c.score(a)}').join(' · '),
       if (c.personality.isNotEmpty) c.personality,
+      'Inspiration: ${c.inspiration ? 'available' : 'none'}',
+      if (c.isCompanion) 'Loyalty: ${c.loyalty}/100 (${c.loyaltyLabel})',
+      if (c.personalQuest.isNotEmpty) 'Personal quest: ${c.personalQuest}',
       'Made in DnD',
     ].join('\n');
 
@@ -140,7 +143,7 @@ class CharacterCard extends StatelessWidget {
 
   Character get c => character;
   Color get _color => c.primaryClass.color;
-  String get _blurb => c.personality.isNotEmpty ? c.personality : (c.backstory.split(RegExp(r'(?<=[.!?])\s')).firstOrNull ?? '');
+  String get _blurb => c.personalQuest.isNotEmpty ? 'Personal quest: ${c.personalQuest}' : c.personality.isNotEmpty ? c.personality : (c.backstory.split(RegExp(r'(?<=[.!?])\s')).firstOrNull ?? '');
 
   Widget _stats({required Color fg, required Color sub, required Color tile, double size = 17}) => Row(children: [
         for (final (label, value) in [('HP', '${c.maxHp}'), ('AC', '${c.armorClass}'), ('SPD', '${c.speed}'), ('PROF', signed(c.proficiency))])
@@ -167,13 +170,16 @@ class CharacterCard extends StatelessWidget {
           ),
       ]);
 
-  Widget _brand(Color fg, Color sub) => Row(children: [
+  Widget _brand(Color fg, Color sub) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+    if (c.personalQuest.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('Quest: ${c.personalQuest}', maxLines: 1, overflow: TextOverflow.ellipsis, style: T.caption(color: sub).copyWith(fontSize: 9))),
+    Row(children: [
         ClipRRect(borderRadius: BorderRadius.circular(5), child: Image.asset('assets/icon/icon.png', width: 16, height: 16, errorBuilder: (_, _, _) => const SizedBox(width: 16))),
         const SizedBox(width: 6),
         Text('DnD', style: T.h3(color: fg).copyWith(fontSize: 12)),
         const Spacer(),
-        Text(c.alignment, style: T.caption(color: sub).copyWith(fontSize: 11)),
-      ]);
+        Text([if (c.inspiration) 'Inspired', if (c.isCompanion) 'Loyalty ${c.loyalty}' else c.alignment].join(' · '), style: T.caption(color: sub).copyWith(fontSize: 10)),
+      ]),
+    ]);
 
   // A full-bleed portrait with the details on a gradient.
   Widget _poster() {
@@ -297,7 +303,7 @@ class CharacterCard extends StatelessWidget {
               clipper: _ArchClipper(),
               child: Container(
                 width: 210,
-                height: 236,
+                height: 222,
                 decoration: BoxDecoration(border: Border.all(color: gold, width: 2)),
                 child: PortraitFill(character: c),
               ),
@@ -309,11 +315,11 @@ class CharacterCard extends StatelessWidget {
               child: Text(c.name.toUpperCase(), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.h3(color: const Color(0xFFF5E6B8)).copyWith(fontFamily: 'serif', fontSize: 17, letterSpacing: 2.5)),
             ),
             const SizedBox(height: 6),
-            Text('${c.title.isNotEmpty ? c.title : 'The ${c.primaryClass.name}'} · ${c.raceLabel}', textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.caption(color: gold.withValues(alpha: 0.85)).copyWith(fontStyle: FontStyle.italic)),
+            Text(c.personalQuest.isNotEmpty ? 'Quest: ${c.personalQuest}' : '${c.title.isNotEmpty ? c.title : 'The ${c.primaryClass.name}'} · ${c.raceLabel}', textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.caption(color: gold.withValues(alpha: 0.85)).copyWith(fontStyle: FontStyle.italic)),
             const Spacer(),
             _abilities(fg: const Color(0xFFF5E6B8), sub: gold.withValues(alpha: 0.7)),
             const SizedBox(height: 8),
-            Text('HP ${c.maxHp}  ✦  AC ${c.armorClass}  ✦  ${c.alignment}', style: T.caption(color: gold).copyWith(fontSize: 10.5, letterSpacing: 1)),
+            Text('HP ${c.maxHp}  ✦  AC ${c.armorClass}  ✦  ${c.inspiration ? 'Inspired' : c.alignment}${c.isCompanion ? ' · Loyalty ${c.loyalty}' : ''}', style: T.caption(color: gold).copyWith(fontSize: 9, letterSpacing: 0.4)),
           ]),
         ),
       ),

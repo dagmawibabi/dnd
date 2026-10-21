@@ -52,6 +52,7 @@ dependencies:
   video_player: ^2.14.1
   gal: ^2.3.3
   url_launcher: ^6.3.3
+  speech_to_text: ^7.0.0
 
 dev_dependencies:
   flutter_test:

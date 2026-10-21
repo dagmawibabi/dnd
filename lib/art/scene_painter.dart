@@ -8,12 +8,21 @@ import 'paint_cache.dart';
 
 /// Animated, procedurally painted scene backdrop for a location.
 class SceneView extends StatefulWidget {
-  const SceneView({super.key, required this.location, this.time = 'day', this.mood = 'calm', this.seed = 0, this.animate = false});
+  const SceneView({super.key, required this.location, this.time = 'day', this.mood = 'calm', this.seed = 0, this.animate = false, this.own = true});
   final String location;
   final String time;
   final String mood;
   final int seed;
   final bool animate;
+
+  /// Show the player's own picture for this place when they chose one.
+  final bool own;
+
+  /// Set by the app: the player's picture for a place, how to show it, and
+  /// what to listen to for changes.
+  static String? Function(String location, int seed)? ownImage;
+  static Widget Function(String path, Widget painted)? showOwn;
+  static Listenable? ownChanges;
 
   @override
   State<SceneView> createState() => _SceneViewState();
@@ -36,6 +45,18 @@ class _SceneViewState extends State<SceneView> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    final find = SceneView.ownImage, show = SceneView.showOwn;
+    if (!widget.own || find == null || show == null) return _painted();
+    return ListenableBuilder(
+      listenable: SceneView.ownChanges ?? _c,
+      builder: (context, _) {
+        final path = find(widget.location, widget.seed);
+        return path == null ? _painted() : show(path, _painted());
+      },
+    );
+  }
+
+  Widget _painted() {
     return RepaintBoundary(
       child: Stack(
         fit: StackFit.expand,

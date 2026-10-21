@@ -50,6 +50,11 @@ class SettingsController extends ChangeNotifier {
   String voiceStyle = 'A warm, dramatic storyteller with clear diction.';
   bool speakChatReplies = true;
 
+  // Voice input (speech to text)
+  bool voiceInput = true;
+  bool voiceAutoSend = false;
+  bool companionApproaches = true;
+
   // ElevenLabs voices (voiceEngine == 'elevenlabs')
   String elevenLabsKey = '';
   String elevenModel = 'eleven_flash_v2_5';
@@ -223,6 +228,9 @@ class SettingsController extends ChangeNotifier {
       aiVoice = j['aiVoice'] ?? '';
       voiceStyle = j['voiceStyle'] ?? voiceStyle;
       speakChatReplies = j['speakChat'] ?? true;
+      voiceInput = j['voiceInput'] ?? true;
+      voiceAutoSend = j['voiceAutoSend'] ?? false;
+      companionApproaches = j['approaches'] ?? true;
       elevenLabsKey = j['elKey'] ?? '';
       elevenModel = j['elModel'] ?? elevenModel;
       elevenVoice = j['elVoice'] ?? '';
@@ -312,6 +320,9 @@ class SettingsController extends ChangeNotifier {
         'aiVoice': aiVoice,
         'voiceStyle': voiceStyle,
         'speakChat': speakChatReplies,
+        'voiceInput': voiceInput,
+        'voiceAutoSend': voiceAutoSend,
+        'approaches': companionApproaches,
         'elKey': elevenLabsKey,
         'elModel': elevenModel,
         'elVoice': elevenVoice,

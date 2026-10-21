@@ -159,11 +159,13 @@ class Tale with WorldData implements StoryRecord {
     sceneImagePath = o.sceneImagePath;
     pendingNotes = o.pendingNotes;
     bonds = o.bonds;
+    chronicle = o.chronicle;
   }
 
   /// Adds or updates a canon entry by name.
   void remember(String kind, String name, String text) {
     if (name.trim().isEmpty) return;
+    chronicle.record(kind: kind, name: name, state: text, reason: 'Established in the story.', chapter: id, chapterTitle: title, turn: turns);
     final e = canon.where((c) => c.name.toLowerCase() == name.trim().toLowerCase()).firstOrNull;
     if (e == null) {
       canon.add(CanonEntry(id: newId(), kind: kind, name: name.trim(), text: text.trim(), turn: turns));

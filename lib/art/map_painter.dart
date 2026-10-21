@@ -725,7 +725,8 @@ class MapMarkerPainter extends CustomPainter {
 
   void _scaleBar(Canvas canvas, Size size, double inv) {
     final o = Offset(16 * inv, size.height - 22 * inv);
-    final len = 80 * inv;
+    // A fixed length on the map, so it agrees with the ruler at any zoom.
+    final len = kMapDayLength * size.width / 1400;
     final p = Paint()
       ..color = _muted
       ..strokeWidth = 1.5 * inv;
@@ -758,6 +759,9 @@ class MapPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant MapPainter old) => true;
 }
+
+/// One day's travel on foot, in units of a 1400-wide region map.
+const kMapDayLength = 120.0;
 
 /// Small helper for a stable map seed from a name.
 int mapSeed(String name) => stableHash(name) & 0x3FFFFFFF;

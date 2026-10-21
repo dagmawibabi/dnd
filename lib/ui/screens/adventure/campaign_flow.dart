@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../../data/modules.dart';
 import '../../../game/adventure_controller.dart';
+import '../../../game/campaign_world.dart';
 import '../../../game/module_engine.dart';
 import '../../../models/adventure.dart';
 import '../../../models/campaign.dart';
@@ -12,6 +13,7 @@ import '../../../services/export.dart';
 import '../../../services/game_store.dart';
 import '../../../services/settings.dart';
 import '../../../theme/ui.dart';
+import '../story/chapter_recap_screen.dart';
 import 'adventure_screen.dart';
 import 'text_adventure_screen.dart';
 
@@ -24,10 +26,46 @@ AdventureModule? nextSeriesModule(Adventure a) {
   return adventureModules.where((m) => m.seriesId == cur!.seriesId && m.part == cur.part + 1).firstOrNull;
 }
 
-/// Buttons shown when an adventure ends.
-class FinishedActions extends StatelessWidget {
+/// Buttons shown when an adventure ends. The first time, "What changed"
+/// opens by itself.
+class FinishedActions extends StatefulWidget {
   const FinishedActions({super.key, required this.controller});
   final AdventureController controller;
+
+  @override
+  State<FinishedActions> createState() => _FinishedActionsState();
+}
+
+class _FinishedActionsState extends State<FinishedActions> {
+  AdventureController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    final a = controller.adventure;
+    if (!a.seenRecaps.contains(a.id)) {
+      a.seenRecaps.add(a.id);
+      controller.save();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openRecap();
+      });
+    }
+  }
+
+  String? get _continueLabel {
+    final a = controller.adventure;
+    if (a.hero.dead) return null;
+    final next = nextSeriesModule(a);
+    final camp = context.read<GameStore>().campaign(a.campaignId);
+    return next != null ? 'Continue: ${next.title}' : (camp != null ? 'Next chapter' : 'Continue as a campaign');
+  }
+
+  void _openRecap() {
+    final label = _continueLabel;
+    openChapterRecap(context, controller, ended: true, continueLabel: label, onContinue: label == null ? null : () {
+      if (mounted) startNextChapter(context, controller.adventure);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +88,8 @@ class FinishedActions extends StatelessWidget {
           onPressed: () => startNextChapter(context, controller.adventure),
         ),
       const SizedBox(height: 8),
+      AppButton(label: 'What changed', icon: Icons.compare_arrows, kind: ButtonKind.secondary, onPressed: _openRecap),
+      const SizedBox(height: 8),
       AppButton(label: 'Export journal', icon: Icons.ios_share, kind: ButtonKind.secondary, onPressed: () => showExportSheet(context, a)),
     ]);
   }
@@ -60,6 +100,10 @@ Future<void> startNextChapter(BuildContext context, Adventure prev) async {
   final store = context.read<GameStore>();
   final settings = context.read<SettingsController>();
   var camp = store.campaign(prev.campaignId);
+  if (camp != null && camp.chapters.isNotEmpty && camp.chapters.last != prev.id) {
+    showToast(context, 'Continue from the latest chapter to preserve the campaign world.');
+    return;
+  }
   if (camp == null) {
     final name = await _askName(context, '${prev.hero.name.split(' ').first}\'s Saga');
     if (name == null || !context.mounted) return;
@@ -78,7 +122,7 @@ Future<void> startNextChapter(BuildContext context, Adventure prev) async {
   camp.summary = [if (camp.summary.isNotEmpty) camp.summary, 'Chapter $chapterNo, "${prev.title}": ${recap.length > 600 ? '${recap.substring(0, 600)}…' : recap}'].join('\n');
   await store.saveAdventure(prev, syncHero: false);
 
-  final hero = (store.character(prev.hero.id) ?? prev.hero).clone();
+  final hero = prev.hero.clone();
   hero.hp = hero.maxHp;
   hero.conditions.clear();
   final companions = [for (final c in prev.companions) c.clone()..hp = c.maxHp];
@@ -88,7 +132,7 @@ Future<void> startNextChapter(BuildContext context, Adventure prev) async {
   var premise = next?.tagline ?? 'The story continues. Previously: ${camp.summary.split('\n').last}';
   if (engine == StoryEngine.ai) {
     try {
-      final p = await AiDungeonMaster(settings).premise(setting: prev.setting, tone: prev.tone, hero: hero, seedIdea: 'A new chapter of an ongoing campaign. Story so far:\n${camp.summary}\nOpen threads: ${prev.quests.where((q) => q.status == QuestStatus.active).map((q) => q.title).join(', ')}');
+      final p = await AiDungeonMaster(settings).premise(setting: prev.setting, tone: prev.tone, hero: hero, seedIdea: 'A new chapter of an ongoing campaign. Story so far:\n${camp.summary}\n${prev.chronicle.prompt()}\nOpen threads: ${prev.quests.where((q) => q.status == QuestStatus.active).map((q) => q.title).join(', ')}');
       title = p['title'] ?? title;
       premise = p['premise'] ?? premise;
     } catch (_) {}
@@ -117,6 +161,7 @@ Future<void> startNextChapter(BuildContext context, Adventure prev) async {
     showDcs: prev.showDcs,
     chaos: prev.chaos,
   );
+  carryChapterWorld(prev, adv);
   camp.chapters.add(adv.id);
   await store.saveCampaign(camp);
   await store.saveAdventure(adv, syncHero: false);

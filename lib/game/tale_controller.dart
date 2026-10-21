@@ -20,6 +20,7 @@ import '../services/tale_store.dart';
 import '../services/usage.dart';
 import 'module_engine.dart' show matchChoice;
 import 'story_host.dart';
+import 'approaches.dart';
 
 /// Runs a text adventure: handcrafted scenes or an AI narrator.
 class TaleController extends ChangeNotifier implements StoryHost {
@@ -392,6 +393,23 @@ class TaleController extends ChangeNotifier implements StoryHost {
     _enter(next);
     _notify();
     _save();
+    unawaited(_maybeApproach());
+  }
+
+  bool _approaching = false;
+
+  /// Someone who likes the player may come to them about what just happened.
+  Future<void> _maybeApproach() async {
+    if (_approaching || _disposed || !settings.companionApproaches || tale.finished) return;
+    final a = pickApproach(this);
+    if (a == null) return;
+    _approaching = true;
+    try {
+      await deliverApproach(this, a, ai: storyAi);
+      if (!_disposed) audio.play('chime');
+    } finally {
+      _approaching = false;
+    }
   }
 
   Future<void> freeText(String text) async {
@@ -449,6 +467,7 @@ class TaleController extends ChangeNotifier implements StoryHost {
       _notify();
       _save();
     }
+    if (error == null) unawaited(_maybeApproach());
   }
 
   void _applyTurn(TaleTurn turn) {

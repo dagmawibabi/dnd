@@ -32,6 +32,7 @@ import 'map_screen.dart';
 import 'sheets.dart';
 import '../story/story_tools.dart';
 import '../story/story_extras.dart';
+import '../../widgets/voice_input_button.dart';
 
 /// Hooks a controller's pending rolls / level-ups to dialogs.
 mixin AdventureDialogs<T extends StatefulWidget> on State<T> {
@@ -203,6 +204,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             _statusBar(),
             RecapBanner(host: _ctl, lastPlayed: _lastPlayed),
             Expanded(child: _feed()),
+            ApproachBanner(host: _ctl),
             _bottom(),
           ]),
         ),
@@ -383,6 +385,8 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             ),
           ),
           const SizedBox(width: 8),
+          VoiceInputButton(controller: _input, onSubmit: _submit, enabled: !disabled),
+          if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
           CircleIconButton(icon: Icons.arrow_upward, size: 44, tooltip: 'Send', onPressed: disabled ? null : _submit),
         ]),
       ]),

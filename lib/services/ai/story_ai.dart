@@ -64,9 +64,11 @@ You role-play ${npc.name}${npc.role.isEmpty ? '' : ', ${npc.role}'} in an intera
 About ${npc.name}: ${npc.description.isEmpty ? 'decide a consistent personality from the story so far' : npc.description}${npc.notes.isEmpty ? '' : '\nWhat ${npc.name} remembers: ${npc.notes}'}
 How ${npc.name} feels about ${host.playerName}: ${bond.describe(npc.name)}.
 Stay in character. Reply in 1-4 sentences of natural speech (actions in *asterisks* are fine). Have your own goals, opinions and boundaries; you may refuse, tease, lie or change the subject.
+Respect current world memory and your personal history. Only discuss facts your character could reasonably know; private secrets of other people are not automatically known to you.
 Relationships evolve slowly and believably. Romance happens only if ${host.playerName} pursues it and it fits who ${npc.name} is; ${npc.name} can welcome it, be shy, or turn it down kindly (set "romance_closed": true only for a clear, lasting no). $_rating
 Reply ONLY with JSON: {"reply": "what ${npc.name} says", "friendship_change": -10..10, "romance_change": -10..10, "status": "optional new relationship label like Friends, Partners, Rivals, or empty", "romance_closed": false, "note": "optional short thing ${npc.name} will remember about ${host.playerName}", "memory": "optional durable story fact revealed in this exchange, or empty"}''';
-    final user = '${_context(host)}\n\nCONVERSATION SO FAR:\n${transcript.isEmpty ? '(none)' : transcript}\n${host.playerName}: $line';
+    final memories = host.world.chronicle.history.reversed.where((h) => h.name.toLowerCase() == npc.name.toLowerCase() || line.toLowerCase().contains(h.name.toLowerCase())).take(8).map((h) => '${h.name}: ${h.after} Because: ${h.reason}').join('\n');
+    final user = '${_context(host)}\n\nRELEVANT CHARACTER HISTORY:\n$memories\n\nCONVERSATION SO FAR:\n${transcript.isEmpty ? '(none)' : transcript}\n${host.playerName}: $line';
     final r = await _ask(host, system, user, category: 'npc', maxTokens: 1500, temperature: settings.temperature, json: true);
     final j = extractJsonObject(r.value);
     if (j == null) return CharacterReply(text: readableNarration(r.value), tokens: r.tokens, cost: r.cost);
@@ -85,6 +87,22 @@ Reply ONLY with JSON: {"reply": "what ${npc.name} says", "friendship_change": -1
     );
   }
 
+  /// The first line when a character comes to the protagonist on their own.
+  Future<AiResult<String>> opener(StoryHost host, Npc npc, String why) async {
+    final bond = host.world.bondFor(npc);
+    final past = host.world.chatWith(npc.id);
+    final recent = past.length > 6 ? past.sublist(past.length - 6) : past;
+    final system = '''
+You are ${npc.name}${npc.role.isEmpty ? '' : ', ${npc.role}'} in an interactive story. ${host.worldStyle}
+About ${npc.name}: ${npc.description.isEmpty ? 'keep a consistent personality that fits the story' : npc.description}${npc.notes.isEmpty ? '' : '\nWhat ${npc.name} remembers: ${npc.notes}'}
+How ${npc.name} feels about ${host.playerName}: ${bond.describe(npc.name)}.
+${npc.name} has sought out ${host.playerName} for a private word. Write only what ${npc.name} says to open the conversation: 1-3 sentences of natural speech in first person, ending with something ${host.playerName} can answer. A short action in *asterisks* is fine. No name prefix, no quotes, no JSON. Only mention facts ${npc.name} could know. $_rating''';
+    final user = '${_context(host)}\n\nWORLD MEMORY:\n${host.world.chronicle.prompt(focus: npc.name)}\n\nTHEIR LAST WORDS TOGETHER:\n${recent.isEmpty ? '(none yet)' : recent.map((l) => '${l.fromPlayer ? host.playerName : npc.name}: ${l.text}').join('\n')}\n\nWHY ${npc.name.toUpperCase()} COMES TO TALK NOW: $why';
+    final r = await _ask(host, system, user, category: 'npc', maxTokens: 300, temperature: settings.temperature);
+    final text = AiRoute.isLmStudio(_fast) ? cleanLocalReply(r.value, npc.name) : _unquote(readableNarration(r.value));
+    return AiResult(text, tokens: r.tokens, cost: r.cost);
+  }
+
   /// Small local models lose track of a long JSON prompt: they narrate the
   /// player's actions instead of answering. So the conversation goes as real
   /// chat turns, the reply is plain speech, and a second short call judges
@@ -97,6 +115,8 @@ Reply ONLY with JSON: {"reply": "what ${npc.name} says", "friendship_change": -1
 You are $me${npc.role.isEmpty ? '' : ', ${npc.role}'}, talking face to face with $you. ${host.worldStyle}
 About you: ${npc.description.isEmpty ? 'keep a consistent personality that fits the story' : npc.description}${npc.notes.isEmpty ? '' : '\nYou remember: ${npc.notes}'}
 How you feel about $you: ${bond.describe(me)}.
+Established world memory (respect it; only discuss what your character could know):
+${host.world.chronicle.prompt(focus: '$me $line')}
 What has happened lately:
 ${recentStory(host.log, entries: 6, maxChars: 1000)}
 

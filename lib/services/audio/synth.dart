@@ -588,21 +588,120 @@ String themeForScene(String location, String mood) {
   };
 }
 
+/// Everything that shapes a generated music loop. Built-in themes are specs
+/// too, so the music studio can start from any of them.
+class MusicSpec {
+  const MusicSpec({
+    this.bpm = 90,
+    this.beats = 32,
+    this.root = 57,
+    this.minor = false,
+    this.style = 'lilt',
+    this.lead = 'pluck',
+    this.pad = true,
+    this.bass = true,
+    this.drums = false,
+    this.density = 0.6,
+    this.reverb = 0.4,
+    this.seed = 1,
+    this.altChords = false,
+    this.birds = false,
+    this.drips = false,
+  });
+
+  final double bpm;
+
+  /// Loop length in beats (16, 24 or 32 work best).
+  final int beats;
+
+  /// MIDI note of the key's root.
+  final int root;
+  final bool minor;
+
+  /// lilt (lute arpeggios), ambient (sparse notes), drone (slow tones) or driving (ostinato).
+  final String style;
+
+  /// pluck, sine, tri, square or saw.
+  final String lead;
+  final bool pad, bass, drums;
+
+  /// How busy the melody is, 0..1.
+  final double density;
+  final double reverb;
+  final int seed;
+
+  /// The second chord progression, for a more searching feel.
+  final bool altChords;
+  final bool birds, drips;
+
+  static const styles = ['lilt', 'ambient', 'drone', 'driving'];
+  static const leads = ['pluck', 'sine', 'tri', 'square', 'saw'];
+
+  factory MusicSpec.forTheme(String theme) {
+    final seed = stableSeed(theme);
+    return switch (theme) {
+      'tavern' => MusicSpec(bpm: 112, beats: 32, root: 57, style: 'lilt', pad: false, drums: true, seed: seed),
+      'town' => MusicSpec(bpm: 92, beats: 32, root: 55, style: 'lilt', seed: seed),
+      'forest' => MusicSpec(bpm: 76, beats: 24, root: 62, style: 'ambient', density: 0.7, birds: true, seed: seed),
+      'dungeon' => MusicSpec(bpm: 58, beats: 16, root: 50, minor: true, style: 'drone', lead: 'sine', density: 0.4, drips: true, seed: seed),
+      'combat' => MusicSpec(bpm: 138, beats: 32, root: 52, minor: true, style: 'driving', lead: 'square', drums: true, reverb: 0.18, seed: seed),
+      'boss' => MusicSpec(bpm: 150, beats: 32, root: 50, minor: true, style: 'driving', lead: 'square', drums: true, reverb: 0.18, seed: seed),
+      'mystery' => MusicSpec(bpm: 64, beats: 16, root: 53, minor: true, style: 'drone', lead: 'sine', density: 0.4, altChords: true, seed: seed),
+      'triumph' => MusicSpec(bpm: 100, beats: 32, root: 60, style: 'lilt', seed: seed),
+      'calm' => MusicSpec(bpm: 70, beats: 16, root: 60, style: 'ambient', density: 0.7, seed: seed),
+      _ => MusicSpec(bpm: 66, beats: 24, root: 50, minor: true, style: 'ambient', density: 0.7, altChords: true, seed: seed),
+    };
+  }
+
+  Map<String, dynamic> toJson() => {
+        'bpm': bpm,
+        'beats': beats,
+        'root': root,
+        'minor': minor,
+        'style': style,
+        'lead': lead,
+        'pad': pad,
+        'bass': bass,
+        'drums': drums,
+        'density': density,
+        'reverb': reverb,
+        'seed': seed,
+        'alt': altChords,
+        'birds': birds,
+        'drips': drips,
+      };
+
+  factory MusicSpec.fromJson(Map<String, dynamic> j) => MusicSpec(
+        bpm: ((j['bpm'] ?? 90) as num).toDouble(),
+        beats: ((j['beats'] ?? 32) as num).toInt(),
+        root: ((j['root'] ?? 57) as num).toInt(),
+        minor: j['minor'] ?? false,
+        style: j['style'] ?? 'lilt',
+        lead: j['lead'] ?? 'pluck',
+        pad: j['pad'] ?? true,
+        bass: j['bass'] ?? true,
+        drums: j['drums'] ?? false,
+        density: ((j['density'] ?? 0.6) as num).toDouble(),
+        reverb: ((j['reverb'] ?? 0.4) as num).toDouble(),
+        seed: ((j['seed'] ?? 1) as num).toInt(),
+        altChords: j['alt'] ?? false,
+        birds: j['birds'] ?? false,
+        drips: j['drips'] ?? false,
+      );
+
+  /// A copy with some fields changed, by their JSON names.
+  MusicSpec copy(Map<String, dynamic> changes) => MusicSpec.fromJson({...toJson(), ...changes});
+
+  /// Stable id for caching the rendered loop.
+  String get key => stableSeed(toJson().toString()).toRadixString(36);
+}
+
 /// Renders a seamless music loop for [theme]. Heavy: call in an isolate.
-Uint8List renderMusic(String theme) {
-  final spec = switch (theme) {
-    'tavern' => (bpm: 112.0, beats: 32, root: 57, minor: false),
-    'town' => (bpm: 92.0, beats: 32, root: 55, minor: false),
-    'forest' => (bpm: 76.0, beats: 24, root: 62, minor: false),
-    'dungeon' => (bpm: 58.0, beats: 16, root: 50, minor: true),
-    'combat' => (bpm: 138.0, beats: 32, root: 52, minor: true),
-    'boss' => (bpm: 150.0, beats: 32, root: 50, minor: true),
-    'mystery' => (bpm: 64.0, beats: 16, root: 53, minor: true),
-    'triumph' => (bpm: 100.0, beats: 32, root: 60, minor: false),
-    'calm' => (bpm: 70.0, beats: 16, root: 60, minor: false),
-    _ => (bpm: 66.0, beats: 24, root: 50, minor: true),
-  };
-  final beat = 60.0 / spec.bpm;
+Uint8List renderMusic(String theme) => renderMusicSpec(MusicSpec.forTheme(theme));
+
+/// Renders a seamless loop from [spec]. Heavy: call in an isolate.
+Uint8List renderMusicSpec(MusicSpec spec) {
+  final beat = 60.0 / spec.bpm.clamp(30, 220);
   final total = beat * spec.beats;
   final b = _Buf(total);
   final scale = spec.minor ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11];
@@ -610,9 +709,20 @@ Uint8List renderMusic(String theme) {
   // chord progression (scale degrees of root)
   final prog = spec.minor ? [0, 5, 3, 4] : [0, 3, 4, 0];
   final prog2 = spec.minor ? [0, 6, 5, 4] : [0, 5, 3, 4];
-  final chords = theme == 'menu' || theme == 'mystery' ? prog2 : prog;
+  final chords = spec.altChords ? prog2 : prog;
   final barBeats = spec.beats / chords.length;
-  final rnd = math.Random(stableSeed(theme));
+  final rnd = math.Random(spec.seed);
+  final driving = spec.style == 'driving';
+  final density = spec.density.clamp(0, 1).toDouble();
+
+  void lead(double start, double hz, double amp, double dur, {double decay = 0.996, double bright = 0.5}) {
+    if (spec.lead == 'pluck') {
+      _pluck(b, start, hz, amp, decay: decay, dur: dur, wrap: true, bright: bright);
+    } else {
+      final soft = spec.lead == 'square' || spec.lead == 'saw' ? 0.35 : 0.7;
+      _tone(b, start, dur * 0.5, hz, amp * soft, wave: spec.lead, a: 0.01, d: dur * 0.5, r: dur * 0.3, wrap: true, vibrato: 0.003);
+    }
+  }
 
   for (var c = 0; c < chords.length; c++) {
     final start = c * barBeats * beat;
@@ -620,91 +730,260 @@ Uint8List renderMusic(String theme) {
     final d = chords[c];
     final triad = [deg(d), deg(d + 2), deg(d + 4)];
     // Pad
-    if (theme != 'tavern') {
+    if (spec.pad) {
       for (final m in triad) {
         for (final det in [-0.004, 0.004]) {
-          _tone(b, start, dur, midiToHz(m) * (1 + det), theme == 'combat' || theme == 'boss' ? 0.035 : 0.05, wave: 'saw', a: dur * 0.3, d: dur * 0.6, s: 0.6, r: dur * 0.4, wrap: true, vibrato: 0.002);
+          _tone(b, start, dur, midiToHz(m) * (1 + det), driving ? 0.035 : 0.05, wave: 'saw', a: dur * 0.3, d: dur * 0.6, s: 0.6, r: dur * 0.4, wrap: true, vibrato: 0.002);
         }
       }
     }
     // Bass
-    final bassAmp = theme == 'combat' || theme == 'boss' ? 0.22 : 0.16;
-    if (theme == 'combat' || theme == 'boss') {
-      for (var i = 0; i < barBeats * 2; i++) {
-        _tone(b, start + i * beat / 2, beat / 2 * 0.9, midiToHz(triad[0] - 24), bassAmp, wave: 'saw', a: 0.005, d: beat * 0.4, s: 0.2, r: 0.05, wrap: true);
+    if (spec.bass) {
+      final bassAmp = driving ? 0.22 : 0.16;
+      if (driving) {
+        for (var i = 0; i < barBeats * 2; i++) {
+          _tone(b, start + i * beat / 2, beat / 2 * 0.9, midiToHz(triad[0] - 24), bassAmp, wave: 'saw', a: 0.005, d: beat * 0.4, s: 0.2, r: 0.05, wrap: true);
+        }
+      } else {
+        _tone(b, start, dur, midiToHz(triad[0] - 12), bassAmp, wave: 'tri', a: 0.05, d: dur, s: 0.5, r: 0.3, wrap: true);
       }
-    } else {
-      _tone(b, start, dur, midiToHz(triad[0] - 12), bassAmp, wave: 'tri', a: 0.05, d: dur, s: 0.5, r: 0.3, wrap: true);
     }
     // Arpeggio / melody
-    switch (theme) {
-      case 'tavern':
-      case 'town':
-      case 'triumph':
+    switch (spec.style) {
+      case 'lilt':
         final pattern = [0, 1, 2, 1, 0, 2, 1, 2];
         final steps = (barBeats * 2).round();
         for (var i = 0; i < steps; i++) {
           final m = triad[pattern[i % pattern.length]] + (i % 4 == 3 ? 12 : 0);
-          _pluck(b, start + i * beat / 2, midiToHz(m), 0.28, decay: 0.994, dur: beat * 1.6, wrap: true);
+          lead(start + i * beat / 2, midiToHz(m), 0.28, beat * 1.6, decay: 0.994);
         }
         // melody on top
         for (var i = 0; i < barBeats; i++) {
-          if (rnd.nextDouble() < 0.6) {
+          if (rnd.nextDouble() < density) {
             final m = deg(d + 7 + rnd.nextInt(5));
-            _pluck(b, start + i * beat, midiToHz(m), 0.2, decay: 0.996, dur: beat * 2, wrap: true, bright: 0.6);
+            lead(start + i * beat, midiToHz(m), 0.2, beat * 2, bright: 0.6);
           }
         }
-        if (theme == 'tavern') {
+        if (spec.drums) {
           for (var i = 0; i < barBeats; i++) {
             _noiseBurst(b, start + i * beat, 0.08, i % 2 == 0 ? 0.25 : 0.12, lp: 0.3, wrap: true);
           }
         }
-      case 'forest':
-      case 'calm':
-      case 'menu':
+      case 'ambient':
         for (var i = 0; i < barBeats; i++) {
-          if (rnd.nextDouble() < 0.7) {
+          if (rnd.nextDouble() < density) {
             final m = triad[rnd.nextInt(3)] + 12;
-            _pluck(b, start + i * beat + rnd.nextDouble() * 0.05, midiToHz(m), 0.18, decay: 0.997, dur: beat * 3, wrap: true, bright: 0.45);
+            lead(start + i * beat + rnd.nextDouble() * 0.05, midiToHz(m), 0.18, beat * 3, decay: 0.997, bright: 0.45);
           }
         }
-        if (theme == 'forest') {
-          for (var k = 0; k < 3; k++) {
-            final t = start + rnd.nextDouble() * dur;
-            final f = 2600 + rnd.nextDouble() * 1400;
-            _tone(b, t, 0.06, f, 0.04, d: 0.06, sweep: 0.3, wrap: true);
-            _tone(b, t + 0.09, 0.08, f * 1.1, 0.035, d: 0.08, sweep: -0.2, wrap: true);
+        if (spec.drums) {
+          for (var i = 0; i < barBeats; i += 2) {
+            _kick(b, start + i * beat, 0.25, wrap: true);
           }
         }
-      case 'dungeon':
-      case 'mystery':
+      case 'drone':
         for (var i = 0; i < barBeats; i++) {
-          if (rnd.nextDouble() < 0.4) {
+          if (rnd.nextDouble() < density) {
             final m = deg(d + rnd.nextInt(7)) + 12;
-            _tone(b, start + i * beat, beat * 2, midiToHz(m), 0.06, wave: 'sine', a: 0.01, d: beat * 2, r: beat, wrap: true, vibrato: 0.004);
+            if (spec.lead == 'sine') {
+              _tone(b, start + i * beat, beat * 2, midiToHz(m), 0.06, wave: 'sine', a: 0.01, d: beat * 2, r: beat, wrap: true, vibrato: 0.004);
+            } else {
+              lead(start + i * beat, midiToHz(m), 0.12, beat * 2.5, decay: 0.998);
+            }
           }
-          if (theme == 'dungeon' && rnd.nextDouble() < 0.25) {
-            // water drip
+          if (spec.drips && rnd.nextDouble() < 0.25) {
             _tone(b, start + i * beat + rnd.nextDouble() * beat, 0.05, 1200 + rnd.nextDouble() * 600, 0.08, d: 0.05, sweep: 1.5, wrap: true);
           }
         }
-      case 'combat':
-      case 'boss':
+        if (spec.drums) {
+          for (var i = 0; i < barBeats; i += 4) {
+            _kick(b, start + i * beat, 0.35, wrap: true);
+          }
+        }
+      case 'driving':
         final steps = (barBeats * 2).round();
         for (var i = 0; i < steps; i++) {
           final m = triad[(i * 2) % 3] + 12 + (i % 8 == 7 ? 12 : 0);
-          _tone(b, start + i * beat / 2, beat / 2 * 0.8, midiToHz(m), 0.06, wave: 'square', a: 0.003, d: beat * 0.35, s: 0.1, r: 0.03, wrap: true);
+          if (spec.lead == 'square' || spec.lead == 'saw') {
+            _tone(b, start + i * beat / 2, beat / 2 * 0.8, midiToHz(m), 0.06, wave: spec.lead, a: 0.003, d: beat * 0.35, s: 0.1, r: 0.03, wrap: true);
+          } else {
+            lead(start + i * beat / 2, midiToHz(m), 0.16, beat * 0.9, decay: 0.993);
+          }
         }
-        for (var i = 0; i < barBeats; i++) {
-          _kick(b, start + i * beat, 0.55, wrap: true);
-          if (i % 2 == 1) _noiseBurst(b, start + i * beat, 0.14, 0.3, lp: 0.6, wrap: true);
-          _noiseBurst(b, start + i * beat + beat / 2, 0.03, 0.1, lp: 0.95, hp: 0.9, wrap: true);
+        if (spec.drums) {
+          for (var i = 0; i < barBeats; i++) {
+            _kick(b, start + i * beat, 0.55, wrap: true);
+            if (i % 2 == 1) _noiseBurst(b, start + i * beat, 0.14, 0.3, lp: 0.6, wrap: true);
+            _noiseBurst(b, start + i * beat + beat / 2, 0.03, 0.1, lp: 0.95, hp: 0.9, wrap: true);
+          }
         }
     }
+    if (spec.birds) {
+      for (var k = 0; k < 3; k++) {
+        final t = start + rnd.nextDouble() * dur;
+        final f = 2600 + rnd.nextDouble() * 1400;
+        _tone(b, t, 0.06, f, 0.04, d: 0.06, sweep: 0.3, wrap: true);
+        _tone(b, t + 0.09, 0.08, f * 1.1, 0.035, d: 0.08, sweep: -0.2, wrap: true);
+      }
+    }
   }
-  _reverb(b, mix: theme == 'combat' || theme == 'boss' ? 0.18 : 0.4);
+  _reverb(b, mix: spec.reverb.clamp(0, 0.9).toDouble());
   b.normalize(0.7);
   return encodeWav(b.data);
+}
+
+// ------------------------------------------------------------ SOUND DESIGN
+
+/// A sound made in the sound-effects studio.
+class SfxSpec {
+  const SfxSpec({
+    this.wave = 'square',
+    this.hz = 440,
+    this.sweep = 0,
+    this.duration = 0.25,
+    this.attack = 0.005,
+    this.decay = 0.6,
+    this.sustain = 0,
+    this.repeats = 1,
+    this.gap = 0.08,
+    this.step = 0,
+    this.vibrato = 0,
+    this.noise = 0,
+    this.reverb = 0,
+  });
+
+  /// sine, square, saw, tri, noise, pluck or bell.
+  final String wave;
+  final double hz;
+
+  /// Pitch change over the note: -0.9 falls almost to nothing, 2 triples.
+  final double sweep;
+  final double duration, attack;
+
+  /// Fraction of the note spent fading from the peak.
+  final double decay;
+  final double sustain;
+
+  /// Notes in a row, [gap] seconds apart, each [step] semitones higher.
+  final int repeats;
+  final double gap;
+  final int step;
+  final double vibrato, noise, reverb;
+
+  static const waves = ['sine', 'square', 'saw', 'tri', 'noise', 'pluck', 'bell'];
+
+  Map<String, dynamic> toJson() => {
+        'wave': wave,
+        'hz': hz,
+        'sweep': sweep,
+        'dur': duration,
+        'a': attack,
+        'd': decay,
+        's': sustain,
+        'rep': repeats,
+        'gap': gap,
+        'step': step,
+        'vib': vibrato,
+        'noise': noise,
+        'rev': reverb,
+      };
+
+  factory SfxSpec.fromJson(Map<String, dynamic> j) {
+    double n(String k, double d) => ((j[k] ?? d) as num).toDouble();
+    return SfxSpec(
+      wave: j['wave'] ?? 'square',
+      hz: n('hz', 440),
+      sweep: n('sweep', 0),
+      duration: n('dur', 0.25),
+      attack: n('a', 0.005),
+      decay: n('d', 0.6),
+      sustain: n('s', 0),
+      repeats: ((j['rep'] ?? 1) as num).toInt(),
+      gap: n('gap', 0.08),
+      step: ((j['step'] ?? 0) as num).toInt(),
+      vibrato: n('vib', 0),
+      noise: n('noise', 0),
+      reverb: n('rev', 0),
+    );
+  }
+
+  SfxSpec copy(Map<String, dynamic> changes) => SfxSpec.fromJson({...toJson(), ...changes});
+
+  String get key => stableSeed(toJson().toString()).toRadixString(36);
+
+  /// Starting points for experiments, like a retro sound-effects generator.
+  static const kinds = ['coin', 'laser', 'blast', 'powerup', 'hit', 'jump', 'blip', 'magic'];
+
+  factory SfxSpec.random(String kind, math.Random r) {
+    double between(double a, double b) => a + r.nextDouble() * (b - a);
+    return switch (kind) {
+      'coin' => SfxSpec(wave: r.nextBool() ? 'square' : 'sine', hz: between(700, 1400), duration: between(0.06, 0.12), decay: 0.8, repeats: 2, gap: between(0.06, 0.1), step: [4, 5, 7, 12][r.nextInt(4)]),
+      'laser' => SfxSpec(wave: ['square', 'saw', 'sine'][r.nextInt(3)], hz: between(800, 2200), sweep: between(-0.9, -0.5), duration: between(0.12, 0.3), decay: 0.9, vibrato: r.nextBool() ? between(0, 0.03) : 0),
+      'blast' => SfxSpec(wave: 'noise', hz: between(300, 1600), duration: between(0.4, 1.0), decay: 1, reverb: between(0.1, 0.4)),
+      'powerup' => SfxSpec(wave: ['square', 'tri', 'sine'][r.nextInt(3)], hz: between(250, 600), sweep: between(0.3, 1.2), duration: between(0.08, 0.16), repeats: 3 + r.nextInt(4), gap: between(0.05, 0.09), step: [2, 3, 4, 5][r.nextInt(4)], decay: 0.7),
+      'hit' => SfxSpec(wave: r.nextBool() ? 'noise' : 'square', hz: between(120, 500), sweep: between(-0.8, -0.3), duration: between(0.06, 0.18), decay: 1, noise: between(0.2, 0.7)),
+      'jump' => SfxSpec(wave: 'square', hz: between(220, 480), sweep: between(0.6, 1.8), duration: between(0.12, 0.25), decay: 0.9),
+      'magic' => SfxSpec(wave: r.nextBool() ? 'bell' : 'sine', hz: between(500, 1200), sweep: between(-0.1, 0.4), duration: between(0.3, 0.8), repeats: 2 + r.nextInt(4), gap: between(0.06, 0.14), step: [3, 4, 7][r.nextInt(3)], vibrato: between(0, 0.02), reverb: between(0.3, 0.6)),
+      _ => SfxSpec(wave: ['square', 'sine', 'tri'][r.nextInt(3)], hz: between(400, 1200), duration: between(0.03, 0.08), decay: 0.6),
+    };
+  }
+}
+
+/// Renders a studio sound.
+Uint8List renderSfxSpec(SfxSpec s) {
+  final reps = s.repeats.clamp(1, 12);
+  final dur = s.duration.clamp(0.01, 3).toDouble();
+  final tail = 0.15 + (s.reverb > 0 ? 0.5 : 0) + (s.wave == 'pluck' || s.wave == 'bell' ? 0.6 : 0);
+  final b = _Buf((reps - 1) * s.gap + dur + tail);
+  for (var i = 0; i < reps; i++) {
+    final start = i * s.gap;
+    final hz = (s.hz * math.pow(2, s.step * i / 12)).clamp(20, 9000).toDouble();
+    const amp = 0.5;
+    switch (s.wave) {
+      case 'noise':
+        _noiseBurst(b, start, dur, amp, lp: (hz / 4000).clamp(0.02, 1).toDouble(), a: s.attack.clamp(0.001, dur * 0.9).toDouble());
+      case 'pluck':
+        _pluck(b, start, hz, amp, dur: dur + 0.6, bright: 0.5 + s.decay.clamp(0, 1) * 0.3);
+      case 'bell':
+        _bell(b, start, hz, amp, dur: dur + 0.6);
+      default:
+        final a = s.attack.clamp(0.001, dur).toDouble();
+        _tone(b, start, dur, hz, amp, wave: s.wave, a: a, d: math.max(0.01, (dur - a) * s.decay.clamp(0.05, 1)), s: s.sustain.clamp(0, 1).toDouble(), r: 0.08, sweep: s.sweep, vibrato: s.vibrato);
+    }
+    if (s.noise > 0 && s.wave != 'noise') _noiseBurst(b, start, math.min(dur, 0.3), amp * s.noise, lp: 0.4);
+  }
+  if (s.reverb > 0) _reverb(b, mix: s.reverb.clamp(0, 0.9).toDouble(), wrap: false);
+  b.fadeEdges();
+  b.normalize(0.8);
+  return encodeWav(b.data);
+}
+
+/// Tape-style pitch change: [rate] 2 is an octave up and twice as fast.
+Uint8List repitchWav(Uint8List wav, double rate) {
+  if ((rate - 1).abs() < 0.01) return wav;
+  final src = decodeWav(wav);
+  final n = (src.length / rate).floor();
+  final out = Float32List(math.max(1, n));
+  for (var i = 0; i < out.length; i++) {
+    final x = i * rate;
+    final j = x.floor();
+    final f = x - j;
+    final a = j < src.length ? src[j] : 0.0;
+    final c = j + 1 < src.length ? src[j + 1] : 0.0;
+    out[i] = a + (c - a) * f;
+  }
+  return encodeWav(out);
+}
+
+/// Samples of a 16-bit mono WAV made by [encodeWav].
+Float32List decodeWav(Uint8List wav) {
+  if (wav.length <= 44) return Float32List(0);
+  final data = ByteData.sublistView(wav, 44);
+  final out = Float32List(data.lengthInBytes ~/ 2);
+  for (var i = 0; i < out.length; i++) {
+    out[i] = data.getInt16(i * 2, Endian.little) / 32768;
+  }
+  return out;
 }
 
 int stableSeed(String s) => s.codeUnits.fold(7, (a, c) => (a * 31 + c) & 0x3FFFFFFF);

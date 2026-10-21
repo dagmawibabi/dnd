@@ -1,7 +1,8 @@
 import 'adventure.dart';
+import 'world.dart';
 
 /// A multi-chapter saga: the same hero carried through linked adventures.
-class Campaign {
+class Campaign with WorldData {
   Campaign({
     required this.id,
     required this.name,
@@ -35,6 +36,7 @@ class Campaign {
   DateTime createdAt;
 
   Map<String, dynamic> toJson() => {
+        ...worldToJson(),
         'id': id,
         'name': name,
         'hero': heroId,
@@ -56,5 +58,5 @@ class Campaign {
         summary: j['summary'] ?? '',
         seriesId: j['series'],
         createdAt: DateTime.tryParse(j['created'] ?? '') ?? DateTime.now(),
-      );
+      )..worldFromJson(j);
 }

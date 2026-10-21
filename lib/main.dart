@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'art/scene_painter.dart';
 import 'services/ai/model_catalog.dart';
 import 'services/audio/audio_service.dart';
 import 'services/db/database.dart';
@@ -16,10 +17,12 @@ import 'services/codex_art.dart';
 import 'services/narrator.dart';
 import 'services/usage.dart';
 import 'services/settings.dart';
+import 'services/studio.dart';
 import 'theme/app_theme.dart';
 import 'ui/screens/achievements_screen.dart';
 import 'ui/screens/home_screen.dart';
 import 'ui/screens/onboarding_screen.dart';
+import 'ui/widgets/media_view.dart';
 
 /// App-wide messenger so services can show toasts (e.g. achievements).
 final rootMessenger = GlobalKey<ScaffoldMessengerState>();
@@ -45,7 +48,12 @@ Future<void> _start() async {
     final tales = await TaleStore.open(db);
     final catalog = ModelCatalog(prefs);
     final images = ImageService(settings, catalog);
-    final audio = AudioService(settings);
+    final studio = StudioStore(prefs);
+    final audio = AudioService(settings)..studio = studio;
+    // The player's own pictures stand in for painted places everywhere.
+    SceneView.ownChanges = studio;
+    SceneView.ownImage = studio.sceneImageFor;
+    SceneView.showOwn = (path, painted) => MediaView(path: path, fallback: painted);
     final usage = UsageTracker(prefs, catalog, settings: settings);
     final narrator = Narrator(settings, catalog: catalog);
     final codexArt = CodexArt(prefs);
@@ -63,6 +71,7 @@ Future<void> _start() async {
           ChangeNotifierProvider.value(value: narrator),
           ChangeNotifierProvider.value(value: achievements),
           ChangeNotifierProvider.value(value: codexArt),
+          ChangeNotifierProvider.value(value: studio),
         ],
         child: const DndApp(),
       ),

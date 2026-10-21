@@ -364,7 +364,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         kicker: 'Your tools',
         title: 'Same tools, both modes',
         sub: 'D&D and text adventures share a journal, map, notes and AI helpers, plus tools that belong to each mode.',
-        demo: Wrap(spacing: 6, runSpacing: 2, children: [
+        demo: Wrap(spacing: 6, runSpacing: 6, children: [
           for (final (i, t) in const [
             (Icons.book_outlined, 'Journal'),
             (Icons.map_outlined, 'Map'),

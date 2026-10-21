@@ -1,5 +1,6 @@
 import 'adventure.dart';
 import 'character.dart' show Character, newId;
+import 'chronicle.dart';
 
 /// What the story feed needs from a D&D adventure or a text adventure.
 abstract interface class StoryRecord {
@@ -96,7 +97,7 @@ class Bond {
         'r': romance,
         's': status,
         'rc': romanceClosed,
-        'm': (moments.length > 40 ? moments.sublist(moments.length - 40) : moments).map((m) => m.toJson()).toList(),
+        'm': moments.map((m) => m.toJson()).toList(),
       };
   factory Bond.fromJson(Map<String, dynamic> j) => Bond(
         friendship: j['f'] ?? 0,
@@ -109,20 +110,24 @@ class Bond {
 
 /// One line of a private conversation with a character.
 class ChatLine {
-  ChatLine({required this.fromPlayer, required this.text, DateTime? at, this.tokens = 0, this.cost = 0}) : at = at ?? DateTime.now();
+  ChatLine({required this.fromPlayer, required this.text, DateTime? at, this.tokens = 0, this.cost = 0, this.opener = ''}) : at = at ?? DateTime.now();
   final bool fromPlayer;
+
+  /// Why the character started this conversation themselves, or empty.
+  final String opener;
   final String text;
   final DateTime at;
   final int tokens;
   final double cost;
 
-  Map<String, dynamic> toJson() => {'p': fromPlayer, 't': text, 'at': at.millisecondsSinceEpoch, if (tokens > 0) 'tok': tokens, if (cost > 0) 'usd': cost};
+  Map<String, dynamic> toJson() => {'p': fromPlayer, 't': text, 'at': at.millisecondsSinceEpoch, if (tokens > 0) 'tok': tokens, if (cost > 0) 'usd': cost, if (opener.isNotEmpty) 'o': opener};
   factory ChatLine.fromJson(Map<String, dynamic> j) => ChatLine(
         fromPlayer: j['p'] ?? false,
         text: j['t'] ?? '',
         at: DateTime.fromMillisecondsSinceEpoch(j['at'] ?? 0),
         tokens: j['tok'] ?? 0,
         cost: ((j['usd'] ?? 0) as num).toDouble(),
+        opener: j['o'] ?? '',
       );
 }
 
@@ -189,6 +194,7 @@ class StoryNote {
 /// State every story keeps, whether it is a D&D adventure or a text adventure:
 /// relationships, private chats, generated media and character voices.
 mixin WorldData {
+  Chronicle chronicle = Chronicle();
   Map<String, Bond> bonds = {};
   Map<String, List<ChatLine>> chats = {};
   List<MediaItem> gallery = [];
@@ -205,6 +211,18 @@ mixin WorldData {
   /// Seconds spent with this story open.
   int playSeconds = 0;
 
+  /// People who started a conversation the player hasn't opened yet.
+  Set<String> unreadChats = {};
+
+  /// Topics characters have already come to the player about (topic -> turn).
+  Map<String, int> approachTopics = {};
+
+  /// Turn of the last time someone started a conversation (-1 never).
+  int lastApproachTurn = -1;
+
+  /// Chapters whose "What changed" screen has been shown.
+  Set<String> seenRecaps = {};
+
   Bond bondFor(Npc person) => bonds.putIfAbsent(person.id, () => Bond(friendship: person.disposition.clamp(-100, 100)));
 
   List<ChatLine> chatWith(String personId) => chats.putIfAbsent(personId, () => []);
@@ -217,16 +235,22 @@ mixin WorldData {
   }
 
   Map<String, dynamic> worldToJson() => {
+        'chronicle': chronicle.toJson(),
         'bonds': bonds.map((k, v) => MapEntry(k, v.toJson())),
-        'chats': chats.map((k, v) => MapEntry(k, (v.length > 120 ? v.sublist(v.length - 120) : v).map((l) => l.toJson()).toList())),
+        'chats': chats.map((k, v) => MapEntry(k, v.map((l) => l.toJson()).toList())),
         'gallery': gallery.map((m) => m.toJson()).toList(),
         'voices': voices,
         'mediaCosts': mediaCosts,
         'playerNotes': notes.where((n) => !n.isEmpty).map((n) => n.toJson()).toList(),
         'play': playSeconds,
+        if (unreadChats.isNotEmpty) 'unread': unreadChats.toList(),
+        if (approachTopics.isNotEmpty) 'approaches': approachTopics,
+        'approachTurn': lastApproachTurn,
+        if (seenRecaps.isNotEmpty) 'seenRecaps': seenRecaps.toList(),
       };
 
   void worldFromJson(Map<String, dynamic> j) {
+    chronicle = Chronicle.fromJson(Map<String, dynamic>.from(j['chronicle'] ?? {}));
     bonds = {for (final e in (j['bonds'] as Map? ?? const {}).entries) e.key as String: Bond.fromJson(Map<String, dynamic>.from(e.value))};
     chats = {
       for (final e in (j['chats'] as Map? ?? const {}).entries)
@@ -237,6 +261,10 @@ mixin WorldData {
     mediaCosts = {for (final e in (j['mediaCosts'] as Map? ?? const {}).entries) e.key as String: (e.value as num).toDouble()};
     notes = [for (final n in (j['playerNotes'] as List? ?? const [])) StoryNote.fromJson(Map<String, dynamic>.from(n))];
     playSeconds = (j['play'] as num?)?.toInt() ?? 0;
+    unreadChats = {for (final id in (j['unread'] as List? ?? const [])) id as String};
+    approachTopics = {for (final e in (j['approaches'] as Map? ?? const {}).entries) e.key as String: (e.value as num).toInt()};
+    lastApproachTurn = (j['approachTurn'] as num?)?.toInt() ?? -1;
+    seenRecaps = {for (final id in (j['seenRecaps'] as List? ?? const [])) id as String};
   }
 
   /// Relationships for the AI, strongest first.

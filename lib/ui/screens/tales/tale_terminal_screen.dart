@@ -23,6 +23,7 @@ import '../story/story_tools.dart';
 import '../story/story_extras.dart';
 import 'tale_tools.dart';
 import 'tales_hub.dart' show taleRoute;
+import '../../widgets/voice_input_button.dart';
 
 /// Classic terminal layout for text adventures: monospace log and a > prompt.
 class TaleTerminalScreen extends StatefulWidget {
@@ -213,6 +214,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
             TaleStatusBar(ctl: _ctl, mono: true),
             RecapBanner(host: _ctl, lastPlayed: _lastPlayed),
             Expanded(child: _feed()),
+            ApproachBanner(host: _ctl, mono: true),
             _actions(),
           ]),
         ),
@@ -411,6 +413,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
                 onSubmitted: (_) => unawaited(_submit()),
               ),
             ),
+            VoiceInputButton(controller: _input, onSubmit: () => unawaited(_submit()), flat: true),
             IconButton(icon: const Icon(Icons.keyboard_return, size: 18), onPressed: () => unawaited(_submit())),
           ]),
         ),
