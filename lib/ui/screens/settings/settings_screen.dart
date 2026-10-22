@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'saved_audio_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../services/ai/elevenlabs.dart';
@@ -12,6 +13,7 @@ import '../../../services/narrator.dart';
 import '../../../services/settings.dart';
 import '../../../services/studio.dart';
 import '../../../services/usage.dart';
+import '../../widgets/voice_picker.dart';
 import '../../../theme/ui.dart';
 import '../achievements_screen.dart';
 import '../adventure/adventure_extras.dart';
@@ -20,7 +22,9 @@ import 'profile_card.dart';
 import '../studio/art_studio.dart';
 import '../studio/music_studio.dart';
 import '../studio/sfx_studio.dart';
+import '../story/character_history_screen.dart';
 import '../story/story_tools.dart' show ReadingControls;
+import '../../widgets/share_cards.dart';
 
 String _modelSub(ModelCatalog cat, String id) {
   final info = cat.byId(id);
@@ -113,12 +117,36 @@ class SettingsScreen extends StatelessWidget {
               Text('Used for new stories. Any story can switch layouts from its menu.', style: T.caption()),
             ]),
           ),
+          _SwitchRow(title: 'Fullscreen stories', subtitle: 'Hide the app bar and status bar while playing', value: s.fullscreen, onChanged: (v) => s.update((s) => s.fullscreen = v)),
         ]),
         const SectionLabel('D&D adventures'),
         RowGroup(children: [
           _SwitchRow(title: 'Hardcore by default', subtitle: 'Permadeath, no rewind, riskier rests', value: s.defaultHardcore, onChanged: (v) => s.update((s) => s.defaultHardcore = v)),
           _SwitchRow(title: 'Show DCs', subtitle: 'Reveal difficulty numbers on checks', value: s.defaultShowDcs, onChanged: (v) => s.update((s) => s.defaultShowDcs = v)),
           _SwitchRow(title: 'Companions start conversations', subtitle: 'Friends and companions come to you about quests, big changes and how they feel', value: s.companionApproaches, onChanged: (v) => s.update((s) => s.companionApproaches = v)),
+        ]),
+        const SectionLabel('Your stories'),
+        RowGroup(children: [
+          ListRow(
+            leading: const Icon(Icons.diversity_3_outlined, size: 20),
+            title: 'Characters you\'ve met',
+            subtitle: 'Everyone from every story, and their profiles',
+            trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+            onTap: () => openCharacterHistory(context),
+          ),
+          ListRow(
+            leading: const Icon(Icons.emoji_events_outlined, size: 20),
+            title: 'Achievements',
+            trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AchievementsScreen())),
+          ),
+          ListRow(
+            leading: const Icon(Icons.ios_share, size: 20),
+            title: 'Share your adventure stats',
+            subtitle: 'A card with totals from every story',
+            trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+            onTap: () => showLifetimeShareCard(context),
+          ),
         ]),
         const SectionLabel('Sound'),
         RowGroup(children: [
@@ -166,14 +194,6 @@ class SettingsScreen extends StatelessWidget {
           _SliderRow(title: 'Text size', value: s.textScale, min: 0.85, max: 1.5, label: '${(s.textScale * 100).round()}%', onChanged: (v) => s.update((s) => s.textScale = (v * 20).round() / 20)),
           _SwitchRow(title: 'High contrast', subtitle: 'Brighter secondary text and borders', value: s.highContrast, onChanged: (v) => s.update((s) => s.highContrast = v)),
           _SwitchRow(title: 'Reduce motion', subtitle: 'Fewer animations, no dice tumbling, videos paused', value: s.reducedMotion, onChanged: (v) => s.update((s) => s.reducedMotion = v)),
-        ]),
-        const SectionLabel('Progress'),
-        RowGroup(children: [
-          ListRow(
-            leading: const Icon(Icons.emoji_events_outlined, size: 20),
-            title: 'Achievements & stats',
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AchievementsScreen())),
-          ),
         ]),
         const SectionLabel('Data'),
         RowGroup(children: [
@@ -582,6 +602,31 @@ class _TextPage extends StatelessWidget {
         ListRow(leading: const Icon(Icons.auto_stories_outlined, size: 20), title: 'Story model', subtitle: _modelSub(cat, s.textModel), onTap: () => _pickModel(context, kind: ModelKind.text, title: 'Story model', current: s.textModel, apply: (s, id) => s.textModel = id)),
         ListRow(leading: const Icon(Icons.bolt_outlined, size: 20), title: 'Fast model', subtitle: 'Chats, recaps, ideas, summaries · ${_modelSub(cat, s.fastModel)}', onTap: () => _pickModel(context, kind: ModelKind.text, title: 'Fast model', current: s.fastModel, apply: (s, id) => s.fastModel = id)),
       ]),
+      const SectionLabel('Thinking & length'),
+      RowGroup(children: [
+        _ChoiceRow<String>(
+          title: 'Thinking',
+          subtitle: 'How long reasoning models think before writing. Less is faster and cheaper.',
+          value: s.thinking,
+          options: const [('off', 'Off'), ('low', 'Light'), ('medium', 'Medium'), ('high', 'Deep'), ('auto', 'Model default')],
+          onChanged: (v) => s.update((s) => s.thinking = v),
+        ),
+        _ChoiceRow<int>(
+          title: 'Thinking time limit',
+          subtitle: 'Past this, the model is stopped and asked again without thinking',
+          value: s.thinkingSeconds,
+          options: const [(15, '15 s'), (30, '30 s'), (60, '1 min'), (0, 'No limit')],
+          onChanged: (v) => s.update((s) => s.thinkingSeconds = v),
+        ),
+        _ChoiceRow<int>(
+          title: 'Longest reply',
+          subtitle: 'A hard cap on each reply, thinking included',
+          value: s.maxReplyTokens,
+          options: const [(1500, 'Short'), (3000, 'Medium'), (6000, 'Long'), (0, 'No cap')],
+          onChanged: (v) => s.update((s) => s.maxReplyTokens = v),
+        ),
+      ]),
+      Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('Models that don\'t reason ignore the thinking options. Local LM Studio models think only on Medium or Deep.', style: T.caption())),
       const SectionLabel('Writing'),
       RowGroup(children: [
         _SliderRow(title: 'Creativity', value: s.temperature, min: 0, max: 1.5, label: s.temperature.toStringAsFixed(2), onChanged: (v) => s.update((s) => s.temperature = v)),
@@ -651,7 +696,30 @@ class _ImagesPage extends StatelessWidget {
         _SwitchRow(title: 'Hero portraits', subtitle: 'Your hero in creation and adventures', value: s.aiPortraits, onChanged: on ? (v) => s.update((s) => s.aiPortraits = v) : null),
         _SwitchRow(title: 'Character portraits', subtitle: 'People you meet, in both modes', value: s.aiNpcPortraits, onChanged: on ? (v) => s.update((s) => s.aiNpcPortraits = v) : null),
         _SwitchRow(title: 'Companion portraits', subtitle: 'When someone joins your party', value: s.aiCompanionPortraits, onChanged: on ? (v) => s.update((s) => s.aiCompanionPortraits = v) : null),
-        _SwitchRow(title: 'Scene art', subtitle: 'When the story moves somewhere new', value: s.aiScenes, onChanged: on ? (v) => s.update((s) => s.aiScenes = v) : null),
+        _SwitchRow(title: 'Scene art', subtitle: 'Pictures of the places the story goes', value: s.aiScenes, onChanged: on ? (v) => s.update((s) => s.aiScenes = v) : null),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('Paint scene art', style: T.body()),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: 'places', label: Text('New places', maxLines: 1)),
+                ButtonSegment(value: 'every', label: Text('Every scene', maxLines: 1)),
+                ButtonSegment(value: 'manual', label: Text('When I ask', maxLines: 1)),
+              ],
+              selected: {s.sceneArt},
+              onSelectionChanged: on && s.aiScenes ? (v) => s.update((s) => s.sceneArt = v.first) : null,
+            ),
+            const SizedBox(height: 6),
+            Text(switch (s.sceneArt) {
+              'every' => 'A new picture whenever the scene changes. Richest, and the most expensive.',
+              'manual' => 'Nothing is painted on its own. Use "Paint this scene" from a story\'s menu.',
+              _ => 'A new picture only for a new kind of place or for night falling. Rooms of the same castle or more of the same forest reuse the art. Much cheaper.',
+            }, style: T.caption()),
+          ]),
+        ),
         _SwitchRow(title: 'Map art', subtitle: 'An illustrated map of the region', value: s.aiMaps, onChanged: on ? (v) => s.update((s) => s.aiMaps = v) : null),
       ]),
       const SectionLabel('Special effects'),
@@ -659,7 +727,7 @@ class _ImagesPage extends StatelessWidget {
         _SwitchRow(title: 'Special-effect images', subtitle: 'Cinematic art for big moments, shown in the story', value: s.aiEffects, onChanged: on ? (v) => s.update((s) => s.aiEffects = v) : null),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-          child: Wrap(spacing: 6, runSpacing: 6, children: [
+          child: CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final e in _momentLabels.entries)
               FilterChip(
                 label: Text(e.value),
@@ -668,7 +736,7 @@ class _ImagesPage extends StatelessWidget {
                     ? (v) => s.update((s) => v ? s.effectMoments.add(e.key) : s.effectMoments.remove(e.key))
                     : null,
               ),
-          ]),
+          ])),
         ),
       ]),
       Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('Effects are limited to one every couple of turns. Every image lands in the story\'s Gallery, where you can save it to your phone.', style: T.caption())),
@@ -728,7 +796,7 @@ class _VoicePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.watch<SettingsController>();
     final cat = context.watch<ModelCatalog>();
-    final narrator = context.read<Narrator>();
+    final narrator = context.watch<Narrator>();
     final voices = cat.voicesFor(s.speechModel);
     return ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 40), children: [
       const SectionLabel('Read aloud'),
@@ -743,9 +811,13 @@ class _VoicePage extends StatelessWidget {
           },
           preview: () => narrator.speakNow('The torches gutter as the iron door groans open. Something stirs in the dark.'),
         ),
-        _SwitchRow(title: 'Distinct character voices', subtitle: 'Everyone sounds different from the narrator', value: s.npcVoices, onChanged: (v) => s.update((s) => s.npcVoices = v)),
-        _SwitchRow(title: 'Speak chat replies', subtitle: 'Characters answer out loud in conversations', value: s.speakChatReplies, onChanged: (v) => s.update((s) => s.speakChatReplies = v)),
+        _SwitchRow(title: 'Distinct character voices', subtitle: 'Each character gets a voice that fits them (by gender where known) and keeps it all story', value: s.npcVoices, onChanged: (v) => s.update((s) => s.npcVoices = v)),
+        _SwitchRow(title: 'Speak character replies', subtitle: 'Party remarks under the story, and answers in private chats', value: s.speakChatReplies, onChanged: (v) => s.update((s) => s.speakChatReplies = v)),
+        _SliderRow(title: 'Reading speed', value: s.narrationSpeed, min: 0.5, max: 2.5, label: '${s.narrationSpeed.toStringAsFixed(2).replaceFirst(RegExp(r'0$'), '')}×', onChanged: (v) => s.update((s) => s.narrationSpeed = (v * 20).round() / 20)),
       ]),
+      Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('While the story is read aloud, a player above the choices lets you pause, skip back or ahead, restart a passage and change speed.', style: T.caption())),
+      const SectionLabel('Saved audio'),
+      const _VoiceCacheRow(),
       const SectionLabel('Voice input'),
       RowGroup(children: [
         _SwitchRow(title: 'Speak instead of typing', subtitle: 'A microphone button next to story and chat inputs. What you say is transcribed into the box so you can check it.', value: s.voiceInput, onChanged: (v) => s.update((s) => s.voiceInput = v)),
@@ -770,24 +842,19 @@ class _VoicePage extends StatelessWidget {
           ListRow(leading: const Icon(Icons.graphic_eq, size: 20), title: 'Voice model', subtitle: _modelSub(cat, s.speechModel), onTap: () => _pickModel(context, kind: ModelKind.speech, title: 'Voice model', current: s.speechModel, apply: (s, id) => s
             ..speechModel = id
             ..aiVoice = '')),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Narrator voice', style: T.body()),
-              const SizedBox(height: 8),
-              if (voices.isEmpty) Text('This model doesn\'t list its voices; its default is used.', style: T.caption()),
-              Wrap(spacing: 6, runSpacing: 6, children: [
-                for (final v in voices)
-                  ChoiceChip(
-                    label: Text(v),
-                    selected: (s.aiVoice.isEmpty ? voices.first : s.aiVoice) == v,
-                    onSelected: (_) {
-                      s.update((s) => s.aiVoice = v);
-                      narrator.speakNow('Welcome back, adventurer.');
-                    },
-                  ),
-              ]),
-            ]),
+          ListRow(
+            leading: const Icon(Icons.record_voice_over_outlined, size: 20),
+            title: 'Narrator voice',
+            subtitle: voices.isEmpty
+                ? 'This model doesn\'t list its voices; its default is used.'
+                : '${s.aiVoice.isEmpty ? voices.first : s.aiVoice}${Narrator.voiceTraits[s.aiVoice.isEmpty ? voices.first : s.aiVoice] == null ? '' : ' · ${Narrator.voiceTraits[s.aiVoice.isEmpty ? voices.first : s.aiVoice]}'}',
+            trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+            onTap: voices.isEmpty
+                ? null
+                : () async {
+                    final id = await showVoicePicker(context, title: 'Narrator voice', current: s.aiVoice.isEmpty ? voices.first : s.aiVoice);
+                    if (id != null && id.isNotEmpty) s.update((s) => s.aiVoice = id);
+                  },
           ),
           ListRow(
             leading: const Icon(Icons.theater_comedy_outlined, size: 20),
@@ -808,7 +875,6 @@ class _VoicePage extends StatelessWidget {
           ),
         ]),
         Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('AI voices are cached on the device, so replaying a line is free. Pick a voice for any character from their profile in People. If an AI voice fails, the device voice takes over.', style: T.caption())),
-        if (narrator.lastError != null) Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('Last AI voice error: ${narrator.lastError}', style: T.caption(color: AppColors.warning))),
       ] else
         RowGroup(children: [
           _SliderRow(title: 'Speed', value: s.ttsRate, min: 0.2, max: 1.0, label: '${(s.ttsRate * 2).toStringAsFixed(1)}×', onChanged: (v) => s.update((s) => s.ttsRate = v)),
@@ -820,6 +886,60 @@ class _VoicePage extends StatelessWidget {
             onTap: () => showAppSheet(context, builder: (_) => const _DeviceVoicePicker()),
           ),
         ]),
+      const SizedBox(height: 10),
+      AppButton(label: narrator.speaking ? 'Stop' : 'Hear the narrator', icon: narrator.speaking ? Icons.stop_circle_outlined : Icons.volume_up_outlined, kind: ButtonKind.secondary, onPressed: () => narrator.speaking ? narrator.stop() : narrator.speakNow('The torches gutter as the iron door groans open. Something stirs in the dark.')),
+      if (narrator.lastError != null) Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text(narrator.lastError!, style: T.caption(color: AppColors.warning))),
+    ]);
+  }
+}
+
+/// How much AI speech is saved on the device, with a way to clear it.
+class _VoiceCacheRow extends StatefulWidget {
+  const _VoiceCacheRow();
+
+  @override
+  State<_VoiceCacheRow> createState() => _VoiceCacheRowState();
+}
+
+class _VoiceCacheRowState extends State<_VoiceCacheRow> {
+  (int, int)? _stats;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final s = await context.read<Narrator>().cacheStats();
+    if (mounted) setState(() => _stats = s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final st = _stats;
+    final mb = st == null ? 0.0 : st.$2 / (1024 * 1024);
+    return RowGroup(children: [
+      ListRow(
+        leading: const Icon(Icons.library_music_outlined, size: 20),
+        title: st == null ? 'Checking…' : '${st.$1} clips · ${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB',
+        subtitle: 'Narration, character lines, chat replies and voice samples are kept, so listening again (even to old scenes) is free and instant. Tap to see and play them.',
+        onTap: () async {
+          await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SavedAudioScreen()));
+          await _load();
+        },
+        trailing: TextButton(
+          onPressed: st == null || st.$1 == 0
+              ? null
+              : () async {
+                  if (!await confirm(context, title: 'Clear saved audio?', message: 'Lines will be generated again (and charged again) the next time they are read.')) return;
+                  if (!context.mounted) return;
+                  await context.read<Narrator>().clearCache();
+                  await _load();
+                },
+          child: const Text('Clear'),
+        ),
+      ),
     ]);
   }
 }
@@ -1057,6 +1177,32 @@ class _SliderRow extends StatelessWidget {
   }
 }
 
+/// A setting with a few named choices, shown as chips under its title.
+class _ChoiceRow<V> extends StatelessWidget {
+  const _ChoiceRow({required this.title, this.subtitle, required this.value, required this.options, required this.onChanged});
+  final String title;
+  final String? subtitle;
+  final V value;
+  final List<(V, String)> options;
+  final ValueChanged<V> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: T.body()),
+        if (subtitle != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(subtitle!, style: T.small())),
+        const SizedBox(height: 8),
+        CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final (v, label) in options)
+            ChoiceChip(label: Text(label), selected: v == value, onSelected: (_) => onChanged(v)),
+        ])),
+      ]),
+    );
+  }
+}
+
 // ------------------------------------------------------------- elevenlabs
 
 class _ElevenLabsSection extends StatefulWidget {
@@ -1067,7 +1213,6 @@ class _ElevenLabsSection extends StatefulWidget {
 }
 
 class _ElevenLabsSectionState extends State<_ElevenLabsSection> {
-  String _q = '';
 
   @override
   void initState() {
@@ -1082,7 +1227,7 @@ class _ElevenLabsSectionState extends State<_ElevenLabsSection> {
     final s = context.watch<SettingsController>();
     final narrator = context.watch<Narrator>();
     final masked = s.elevenLabsKey.length > 8 ? '••••${s.elevenLabsKey.substring(s.elevenLabsKey.length - 4)}' : '••••';
-    final voices = narrator.elevenVoices.where((v) => _q.isEmpty || '${v.name} ${v.traits} ${v.description}'.toLowerCase().contains(_q)).toList();
+    final voices = narrator.elevenVoices;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       RowGroup(children: [
         ListRow(
@@ -1110,31 +1255,25 @@ class _ElevenLabsSectionState extends State<_ElevenLabsSection> {
       ]),
       if (s.elevenLabsKey.isNotEmpty) ...[
         SectionLabel('Narrator voice', trailing: GestureDetector(onTap: () => narrator.loadElevenVoices(force: true), child: Text('Refresh', style: T.caption(color: AppColors.textMuted)))),
-        TextField(style: T.body(), decoration: const InputDecoration(hintText: 'Search voices, accents, styles', prefixIcon: Icon(Icons.search, size: 18)), onChanged: (v) => setState(() => _q = v.toLowerCase())),
-        const SizedBox(height: 8),
         if (narrator.elevenLoading) const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
         if (narrator.elevenError != null) Text("Couldn't load voices: ${narrator.elevenError}", style: T.small(color: AppColors.danger)),
         if (!narrator.elevenLoading && narrator.elevenError == null && voices.isEmpty) Text('No voices found.', style: T.small()),
         if (voices.isNotEmpty)
           RowGroup(children: [
-            for (final v in voices.take(120))
-              ListRow(
-                title: v.name,
-                subtitle: [if (v.traits.isNotEmpty) v.traits, if (v.category.isNotEmpty) v.category].join(' · '),
-                onTap: () {
-                  s.update((s) => s
-                    ..elevenVoice = v.id
-                    ..elevenVoiceName = v.name);
-                  if (v.previewUrl != null) narrator.playSample(v.previewUrl!);
-                },
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (v.previewUrl != null) IconButton(tooltip: 'Play sample', icon: const Icon(Icons.play_circle_outline), onPressed: () => narrator.playSample(v.previewUrl!)),
-                  Icon((s.elevenVoice.isEmpty ? narrator.elevenVoices.first.id : s.elevenVoice) == v.id ? Icons.check_circle : Icons.circle_outlined, size: 20, color: (s.elevenVoice.isEmpty ? narrator.elevenVoices.first.id : s.elevenVoice) == v.id ? AppColors.accent : AppColors.textFaint),
-                ]),
-              ),
+            ListRow(
+              leading: const Icon(Icons.record_voice_over_outlined, size: 20),
+              title: s.elevenVoiceName.isEmpty ? narrator.elevenVoices.first.name : s.elevenVoiceName,
+              subtitle: narrator.describeVoice(s.elevenVoice.isEmpty ? narrator.elevenVoices.first.id : s.elevenVoice),
+              trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+              onTap: () async {
+                final id = await showVoicePicker(context, title: 'Narrator voice', current: s.elevenVoice.isEmpty ? narrator.elevenVoices.first.id : s.elevenVoice);
+                if (id == null || id.isEmpty) return;
+                s.update((s) => s
+                  ..elevenVoice = id
+                  ..elevenVoiceName = narrator.labelOfVoice(id));
+              },
+            ),
           ]),
-        const SizedBox(height: 10),
-        AppButton(label: 'Hear the narrator', icon: Icons.volume_up_outlined, kind: ButtonKind.secondary, onPressed: () => narrator.speakNow('The torches gutter as the iron door groans open. Something stirs in the dark.')),
         Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 0), child: Text('Samples are free. Spoken lines use your ElevenLabs characters and are cached, so replays are free. Characters get distinct voices automatically; pick one for anyone from their profile in People.', style: T.caption())),
       ],
     ]);

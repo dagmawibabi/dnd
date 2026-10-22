@@ -1,7 +1,19 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:dnd/game/money.dart';
+import 'package:dnd/game/tale_controller.dart';
+import 'package:dnd/models/character.dart';
+import 'package:dnd/models/companion.dart';
 import 'package:dnd/models/tale.dart';
+import 'package:dnd/models/world.dart';
+import 'package:dnd/services/companion_life.dart';
+import 'package:dnd/services/companion_store.dart';
+import 'package:dnd/ui/screens/companions/companion_chat.dart';
+import 'package:dnd/ui/screens/companions/companion_editor.dart';
+import 'package:dnd/ui/screens/companions/companion_profile.dart';
+import 'package:dnd/ui/screens/companions/companions_screen.dart';
+import 'package:dnd/ui/screens/story/finance_screen.dart';
 import 'package:dnd/services/achievements.dart';
 import 'package:dnd/services/ai/model_catalog.dart';
 import 'package:dnd/services/audio/audio_service.dart';
@@ -12,6 +24,7 @@ import 'package:dnd/services/settings.dart';
 import 'package:dnd/services/tale_store.dart';
 import 'package:dnd/services/usage.dart';
 import 'package:dnd/theme/app_theme.dart';
+import 'package:dnd/theme/ui.dart' show ListRow;
 import 'package:dnd/ui/screens/adventure/adventure_extras.dart';
 import 'package:dnd/ui/screens/home_screen.dart';
 import 'package:dnd/ui/screens/tales/tale_screen.dart';
@@ -93,6 +106,8 @@ void main() {
       ChangeNotifierProvider.value(value: usage),
       ChangeNotifierProvider.value(value: achievements),
       Provider.value(value: audio),
+      ChangeNotifierProvider.value(value: CompanionStore.instance),
+      Provider.value(value: CompanionLife(settings: settings, store: CompanionStore.instance, images: images, games: games, tales: tales)),
     ],
     child: RepaintBoundary(
       key: boundary,
@@ -180,6 +195,59 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 3));
   });
 
+  testWidgets('companion screens and the wallet fit a phone', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    CompanionStore.instance = CompanionStore.memory();
+    final c = Companion(id: 'mira', name: 'Mira Lightkeeper', kind: 'Robot', pronouns: 'she/her', gender: 'female', personality: 'Dry wit, fiercely loyal, secretly sentimental about old songs.', backstory: 'Built to tend a lighthouse on a coast that no longer has ships.', interests: 'tides, poetry, terrible puns', portrait: PortraitSpec.random('human', seed: 4))
+      ..trips.add(CompanionTrip(storyId: 'x', title: 'The Silent Ship', kind: 'tale', origin: true, summary: 'They escaped the derelict together and swore never to go back.'))
+      ..chat.addAll([
+        ChatLine(fromPlayer: false, text: 'Morning! I dreamt about the derelict again. Want to go somewhere sunnier?', opener: 'Texted you', tokens: 812, cost: 0.0004, suggest: 'The Silent Ship'),
+        ChatLine(fromPlayer: true, text: 'Somewhere sunny sounds perfect.'),
+        ChatLine(fromPlayer: false, text: 'Then pack sunscreen. Robots rust, you know.', tokens: 640),
+      ]);
+    c.profile.remember('You promised to show me a real sunrise.', source: 'chat');
+    c.profile.remember('The harbor master lied to us.', source: 'story:The Silent Ship');
+    CompanionStore.instance.add(c);
+    for (final (name, screen) in <(String, Widget)>[
+      ('companions', const CompanionsScreen()),
+      ('companion-chat', const CompanionChatScreen(companionId: 'mira')),
+      ('companion-profile', const CompanionProfileScreen(companionId: 'mira')),
+      ('companion-editor', const CompanionEditor(companionId: 'mira')),
+      ('home-companions', const HomeScreen()),
+    ]) {
+      await tester.pumpWidget(app(screen));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(tester.takeException(), isNull, reason: name);
+      await preview(tester, name);
+      await tester.pumpWidget(const SizedBox());
+    }
+    final tale = Tale.create(title: 'The Glass Harbor', genre: 'scifi', engine: TaleEngine.ai);
+    final ctl = TaleController(tale: tale, settings: settings, store: tales, audio: audio);
+    final ozzie = ctl.meet('Ozzie Marr', role: 'fixer');
+    spend(ctl, 240, category: 'wage', who: 'Dock office', tellStory: false);
+    spend(ctl, -35, category: 'food', note: 'Noodles', tellStory: false);
+    bankTransfer(ctl, 100);
+    payByCard(ctl, 20, category: 'purchase', note: 'Rain cloak');
+    giveMoney(ctl, ozzie, 30, kind: 'loan', dueIn: 10, rate: 5);
+    tale.wallet.bankRate = 1;
+    await tester.pumpWidget(app(FinanceScreen(host: ctl)));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(tester.takeException(), isNull);
+    await preview(tester, 'wallet');
+    await tester.scrollUntilVisible(find.text('MONEY WITH PEOPLE'), 300, scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).first);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.takeException(), isNull);
+    await preview(tester, 'wallet-people');
+    await tester.scrollUntilVisible(find.textContaining('HISTORY'), 300, scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).first);
+    await tester.pump(const Duration(milliseconds: 300));
+    await preview(tester, 'wallet-history');
+    await tester.pumpWidget(const SizedBox());
+    ctl.dispose();
+  });
+
   testWidgets('homes fit phone and desktop in both modes', (tester) async {
     final fonts = FontLoader('Inter')..addFont(rootBundle.load('assets/fonts/Inter.ttf'));
     await fonts.load();
@@ -234,7 +302,10 @@ void main() {
     expect(find.text('Ambient sound'), findsOneWidget);
     expect(find.text('Terminal layout'), findsOneWidget);
     expect(find.text('Start over'), findsOneWidget);
-    await tester.tap(find.byType(Switch).last);
+    expect(find.text('Fullscreen'), findsOneWidget);
+    // Fullscreen sits right below the terminal switch.
+    expect(tester.getTopLeft(find.text('Fullscreen')).dy, greaterThan(tester.getTopLeft(find.text('Terminal layout')).dy));
+    await tester.tap(find.descendant(of: find.ancestor(of: find.text('Terminal layout'), matching: find.byType(ListRow)), matching: find.byType(Switch)));
     await tester.pumpAndSettle();
     expect(find.byType(TaleTerminalScreen), findsOneWidget);
     expect(tale.terminal, isTrue);

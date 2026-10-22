@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../data/tale_genres.dart';
 import '../data/tales/tales.dart';
 import '../game/module_engine.dart' show moduleById;
 import '../models/adventure.dart';
@@ -86,14 +87,21 @@ dynamic remapArchive(dynamic value, Map<String, String> paths) {
   return value;
 }
 
-Future<Map<String, dynamic>> portableStoryArchive(StoryRecord record, Future<Uint8List?> Function(String) readMedia) async {
+/// [clipsFor] adds each passage's saved narration so the story can be replayed
+/// with its voices on another device.
+Future<Map<String, dynamic>> portableStoryArchive(StoryRecord record, Future<Uint8List?> Function(String) readMedia, {Future<List<(String, Uint8List)>?> Function(LogEntry e)? clipsFor}) async {
   final archive = storyArchive(record);
   final world = record as WorldData;
   final paths = <String>{
+    ...world.replayAudio.values.expand((x) => x),
     if (record.sceneImagePath != null) record.sceneImagePath!,
     ...record.sceneImages.values,
     ...world.gallery.map((m) => m.path),
     ...world.mediaCosts.keys,
+    ...world.itemImages.values,
+    // Pictures sent in private chats.
+    for (final lines in world.chats.values)
+      for (final l in lines) ...l.images,
   };
   if (record is Adventure) {
     paths.addAll([
@@ -126,15 +134,80 @@ Future<Map<String, dynamic>> portableStoryArchive(StoryRecord record, Future<Uin
     }
     final key = 'asset:${assets.length}';
     final ext =
-        RegExp(r'\.(png|jpg|jpeg|webp|gif|mp4|webm|mov)$', caseSensitive: false).firstMatch(path)?.group(1)?.toLowerCase() ??
+        RegExp(r'\.(png|jpg|jpeg|webp|gif|mp4|webm|mov|mp3|wav|m4a)$', caseSensitive: false).firstMatch(path)?.group(1)?.toLowerCase() ??
         (world.gallery.any((m) => m.path == path && m.video) ? 'mp4' : 'png');
     assets[key] = {'ext': ext, 'bytes': base64Encode(bytes)};
     replacements[path] = key;
   }
   archive['state'] = remapArchive(archive['state'], replacements);
+  if (clipsFor != null) {
+    final log = record is Adventure ? record.log : (record as Tale).log;
+    final audio = Map<String, dynamic>.from((archive['state'] as Map)['replayAudio'] ?? const {});
+    for (final e in log) {
+      final at = '${e.at.millisecondsSinceEpoch}';
+      if (audio.containsKey(at) || !(e.kind == LogKind.narration || e.kind == LogKind.dialogue || e.kind == LogKind.companion)) continue;
+      final clips = await clipsFor(e);
+      if (clips == null || clips.isEmpty) continue;
+      final keys = <String>[];
+      for (final (ext, bytes) in clips) {
+        final key = 'asset:${assets.length}';
+        assets[key] = {'ext': ext, 'bytes': base64Encode(bytes)};
+        keys.add(key);
+      }
+      audio[at] = keys;
+    }
+    (archive['state'] as Map)['replayAudio'] = audio;
+    archive['narration'] = audio.length;
+  }
   archive['assets'] = assets;
   archive['missingMedia'] = missing.length;
   return archive;
+}
+
+/// A fresh start of a story for someone else: its premise, world, tone and
+/// characters, with no progress. Importing it begins a new playthrough.
+Future<Map<String, dynamic>> storyTemplate(StoryRecord record, Future<Uint8List?> Function(String) readMedia, {bool cast = true}) async {
+  final world = record as WorldData;
+  final assets = <String, dynamic>{};
+  Future<String?> pack(String? path) async {
+    if (path == null || path.isEmpty) return null;
+    final bytes = await readMedia(path);
+    if (bytes == null) return null;
+    final key = 'asset:${assets.length}';
+    assets[key] = {'ext': RegExp(r'\.(jpg|jpeg|webp)$', caseSensitive: false).firstMatch(path)?.group(1)?.toLowerCase() ?? 'png', 'bytes': base64Encode(bytes)};
+    return key;
+  }
+
+  final people = record is Adventure ? record.npcs : (record as Tale).npcs;
+  final cover = world.gallery.where((m) => m.kind == 'scene' && !m.video).firstOrNull?.path ?? record.sceneImagePath;
+  final state = <String, dynamic>{
+    'title': record is Adventure ? record.title : (record as Tale).title,
+    'premise': record is Adventure ? record.premise : (record as Tale).premise,
+    'tone': world.narratorTone,
+    'world': world.worldNotes,
+    if (record is Adventure) ...{'setting': record.setting, 'mood': record.tone, 'difficulty': record.difficulty, 'hardcore': record.hardcore},
+    if (record is Tale) ...{
+      'genre': record.genre,
+      if (isCustomGenre(record.genre)) 'genreDef': {'id': record.genre, 'name': genreById(record.genre).name, 'tagline': genreById(record.genre).tagline, 'style': genreById(record.genre).style, 'health': genreById(record.genre).healthLabel, 'scene': genreById(record.genre).scene, 'time': genreById(record.genre).time},
+      'protagonist': record.protagonist,
+    },
+    'cover': await pack(cover),
+    if (cast)
+      'cast': [
+        for (final p in people.take(8))
+          {'name': p.name, 'role': p.role, 'description': p.description, if (p.gender.isNotEmpty) 'gender': p.gender, 'portrait': await pack(p.portrait.aiImagePath), if ((world.profiles[p.id]?.backstory ?? '').isNotEmpty) 'backstory': world.profiles[p.id]!.backstory},
+      ],
+  };
+  return {'app': 'DnD', 'format': 'template', 'version': 1, 'kind': record is Adventure ? 'adventure' : 'tale', 'exported': DateTime.now().toIso8601String(), 'state': state, 'assets': assets};
+}
+
+/// What the world notes of a new story from a template should say about its cast.
+String templateWorldNotes(Map<String, dynamic> state) {
+  final cast = [for (final c in (state['cast'] as List? ?? const [])) if (c is Map) c];
+  return [
+    if ((state['world'] ?? '').toString().isNotEmpty) state['world'].toString(),
+    if (cast.isNotEmpty) 'Characters who belong in this world (introduce them naturally as the story needs them): ${cast.map((c) => '${c['name']}${(c['role'] ?? '').toString().isEmpty ? '' : ', ${c['role']}'}${(c['description'] ?? '').toString().isEmpty ? '' : ': ${c['description']}'}').join('; ')}',
+  ].join('\n');
 }
 
 /// Validate every asset before persisting any of them.
@@ -147,7 +220,7 @@ Map<String, (String, Uint8List)> archiveAssets(Map<String, dynamic> archive) {
     if (e.key is! String ||
         !RegExp(r'^asset:\d+$').hasMatch(e.key) ||
         value is! Map ||
-        !['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov'].contains(value['ext']) ||
+        !['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'm4a'].contains(value['ext']) ||
         value['bytes'] is! String) {
       throw const FormatException('Invalid archived media.');
     }

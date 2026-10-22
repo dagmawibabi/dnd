@@ -26,6 +26,23 @@ class AudioService {
 
   final SettingsController settings;
 
+  // The app mixes its own beds and effects. They must not request Android
+  // audio focus individually or they pause narration whenever a sound starts.
+  static final _bedContext = AudioContext(
+    android: const AudioContextAndroid(
+      contentType: AndroidContentType.music,
+      usageType: AndroidUsageType.game,
+      audioFocus: AndroidAudioFocus.none,
+    ),
+  );
+  static final _effectContext = AudioContext(
+    android: const AudioContextAndroid(
+      contentType: AndroidContentType.sonification,
+      usageType: AndroidUsageType.game,
+      audioFocus: AndroidAudioFocus.none,
+    ),
+  );
+
   /// Player-made music and sounds that replace the game's own.
   StudioStore? get studio => _studio;
   StudioStore? _studio;
@@ -188,7 +205,7 @@ class AudioService {
       if (src == null || _wantedAmbience != kind) return;
       final next = AudioPlayer();
       await next.setReleaseMode(ReleaseMode.loop);
-      await next.play(src, volume: 0);
+      await next.play(src, volume: 0, ctx: _bedContext);
       final prev = _amb;
       _amb = next;
       currentAmbience = kind;
@@ -248,7 +265,7 @@ class AudioService {
       final p = _sfxPool[_sfxIdx % _sfxPool.length];
       _sfxIdx++;
       await p.stop();
-      await p.play(src, volume: (settings.sfxVolume * volume).clamp(0, 1));
+      await p.play(src, volume: (settings.sfxVolume * volume).clamp(0, 1), ctx: _effectContext);
       if (rate != 1 || _rated[p] == true) {
         _rated[p] = rate != 1;
         await p.setPlaybackRate(rate);
@@ -280,7 +297,7 @@ class AudioService {
           if (_music == next && _wantedTheme == theme) music(theme, force: true);
         }).catchError((Object _) {});
       }
-      await next.play(src, volume: 0);
+      await next.play(src, volume: 0, ctx: _bedContext);
       final prev = _music;
       _music = next;
       currentTheme = theme;
@@ -399,7 +416,7 @@ class AudioService {
       } else {
         p.onPlayerComplete.first.then((_) => p.dispose()).catchError((Object _) {});
       }
-      await p.play(DeviceFileSource(path), volume: volume);
+      await p.play(DeviceFileSource(path), volume: volume, ctx: loop ? _bedContext : _effectContext);
     } catch (e) {
       debugPrint('preview failed: $e');
     }
@@ -426,7 +443,7 @@ class AudioService {
       final p = AudioPlayer();
       await p.setReleaseMode(ReleaseMode.release);
       p.onPlayerComplete.first.then((_) => p.dispose()).catchError((Object _) {});
-      await p.play(await _toSource('preview_${wav.length}_${wav.hashCode}', wav) ?? BytesSource(wav), volume: (settings.sfxVolume.clamp(0.3, 1) * volume).clamp(0, 1).toDouble());
+      await p.play(await _toSource('preview_${wav.length}_${wav.hashCode}', wav) ?? BytesSource(wav), volume: (settings.sfxVolume.clamp(0.3, 1) * volume).clamp(0, 1).toDouble(), ctx: _effectContext);
     } catch (e) {
       debugPrint('preview failed: $e');
     }
@@ -443,7 +460,7 @@ class AudioService {
       final p = AudioPlayer();
       _preview = p;
       await p.setReleaseMode(ReleaseMode.loop);
-      await p.play(await _toSource('preview_loop_${wav.length}_${wav.hashCode}', wav) ?? BytesSource(wav), volume: volume);
+      await p.play(await _toSource('preview_loop_${wav.length}_${wav.hashCode}', wav) ?? BytesSource(wav), volume: volume, ctx: _bedContext);
     } catch (e) {
       debugPrint('preview failed: $e');
     }

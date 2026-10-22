@@ -7,6 +7,10 @@ import '../../../theme/ui.dart';
 import '../../../data/inventory_rules.dart';
 import '../../widgets/portrait.dart';
 import '../character/character_sheet.dart';
+import '../story/finance_screen.dart';
+import '../story/inventory_screen.dart';
+import '../story/quest_sheet.dart';
+import '../story/vitals_view.dart';
 import '../story/story_tools.dart';
 export '../story/story_tools.dart' show editTextDialog;
 
@@ -21,23 +25,7 @@ class _QuestsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final a = ctl.adventure;
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      if (a.quests.isEmpty) const EmptyState(icon: Icons.flag_outlined, title: 'No quests yet'),
-      if (a.quests.isNotEmpty)
-        RowGroup(children: [
-          for (final q in a.quests.reversed)
-            ListRow(
-              leading: Icon(
-                q.status == QuestStatus.completed ? Icons.check_circle : (q.status == QuestStatus.failed ? Icons.cancel_outlined : Icons.radio_button_unchecked),
-                size: 20,
-                color: q.status == QuestStatus.completed ? AppColors.success : (q.status == QuestStatus.failed ? AppColors.danger : AppColors.textMuted),
-              ),
-              title: q.title,
-              subtitle: q.description,
-            ),
-        ]),
-    ]);
+    return ListView(padding: const EdgeInsets.all(16), children: [QuestList(host: ctl)]);
   }
 }
 
@@ -181,9 +169,9 @@ class _OracleSheetState extends State<_OracleSheet> {
           const SizedBox(height: 14),
           Text('LIKELIHOOD', style: T.overline()),
           const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [
+          CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final l in Likelihood.values) ChoiceChip(label: Text(l.label), selected: _l == l, onSelected: (_) => setState(() => _l = l)),
-          ]),
+          ])),
           const SizedBox(height: 16),
           Row(children: [
             Text('CHAOS FACTOR', style: T.overline()),
@@ -289,6 +277,27 @@ void showVitalsSheet(BuildContext context, AdventureController ctl) {
                 const SizedBox(width: 8),
                 tile('Hit dice', '${h.hitDiceRemaining}/${h.hitDiceTotal}'),
               ]),
+              const SectionLabel('How you feel'),
+              VitalsPanel(vitals: ctl.adventure.vitals),
+              if (h.inventory.any((i) => i.name.toLowerCase().contains('ration'))) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      final r = h.inventory.firstWhere((i) => i.name.toLowerCase().contains('ration'));
+                      r.qty--;
+                      if (r.qty <= 0) h.inventory.remove(r);
+                      ctl.adventure.vitals.apply({'fullness': 35, 'hydration': 20, 'stamina': 15});
+                      ctl.note('${h.name} stopped to eat a ration.');
+                      ctl.save();
+                      ctl.refresh();
+                    },
+                    icon: const Icon(Icons.restaurant_outlined, size: 16),
+                    label: const Text('Eat a ration'),
+                  ),
+                ),
+              ],
               const SectionLabel('Conditions'),
               if (h.conditions.isEmpty && h.concentration == null) Text('Nothing affecting you.', style: T.small()),
               Wrap(spacing: 6, runSpacing: 6, children: [
@@ -321,7 +330,20 @@ void showVitalsSheet(BuildContext context, AdventureController ctl) {
               const SizedBox(height: 6),
               Bar(value: h.xp, max: h.level >= 20 ? h.xp.clamp(1, 1 << 30) : h.xpForNext, color: AppColors.accent),
               const SizedBox(height: 10),
-              Text('${h.gold} gp · carrying ${h.carriedWeight.toStringAsFixed(0)}/${h.carryCapacity.toStringAsFixed(0)} lb · ${h.encumbranceLabel}', style: T.small()),
+              InkWell(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  openInventory(context, ctl);
+                },
+                child: Row(children: [
+                  IconButton(tooltip: 'Wallet', visualDensity: VisualDensity.compact, icon: const Icon(Icons.account_balance_wallet_outlined, size: 18), onPressed: () {
+                    Navigator.pop(ctx);
+                    openFinance(context, ctl);
+                  }),
+                  Expanded(child: Text('${h.gold} gp · ${h.inventory.length} items · ${h.carriedWeight.toStringAsFixed(0)}/${h.carryCapacity.toStringAsFixed(0)} lb · ${h.encumbranceLabel}', style: T.small())),
+                  const Icon(Icons.chevron_right, size: 18, color: AppColors.textFaint),
+                ]),
+              ),
               if (ctl.adventure.companions.isNotEmpty) ...[
                 const SectionLabel('Party'),
                 for (final c in ctl.adventure.companions)

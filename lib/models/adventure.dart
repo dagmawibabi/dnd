@@ -93,6 +93,9 @@ class SceneInfo {
 
   static const interiors = {'dungeon', 'cave', 'crypt', 'tavern', 'sewer', 'temple', 'tower', 'castle'};
 
+  /// The kind of place and light ("forest|night"): scenes that share it can share art.
+  String get environment => '$location|${time == 'night' ? 'night' : 'day'}';
+
   /// Weather for outdoor scenes: explicit, or a stable pick from place, mood and seed.
   String get effectiveWeather {
     if (interiors.contains(location)) return 'indoors';
@@ -129,7 +132,7 @@ class SceneInfo {
 }
 
 class Npc {
-  Npc({required this.id, required this.name, this.role = '', this.disposition = 0, this.description = '', required this.portrait, this.notes = '', this.raceId = 'human', this.alive = true});
+  Npc({required this.id, required this.name, this.role = '', this.disposition = 0, this.description = '', required this.portrait, this.notes = '', this.raceId = 'human', this.alive = true, String gender = ''}) : declaredGender = normalizeGender(gender);
   final String id;
   String name;
   String role;
@@ -140,6 +143,13 @@ class Npc {
   String notes;
   String raceId;
   bool alive;
+
+  /// female, male, nonbinary, or empty when the story hasn't said.
+  String declaredGender;
+  set gender(String g) => declaredGender = normalizeGender(g);
+
+  /// Their gender, or a guess from how they're described (for voices).
+  String get gender => declaredGender.isNotEmpty ? declaredGender : genderFromText('$description $role $notes');
 
   String get attitude => disposition >= 60
       ? 'Devoted'
@@ -161,6 +171,7 @@ class Npc {
         'notes': notes,
         'race': raceId,
         'alive': alive,
+        if (declaredGender.isNotEmpty) 'gender': declaredGender,
       };
   factory Npc.fromJson(Map<String, dynamic> j) => Npc(
         id: j['id'] ?? newId(),
@@ -172,24 +183,99 @@ class Npc {
         notes: j['notes'] ?? '',
         raceId: j['race'] ?? 'human',
         alive: j['alive'] ?? true,
+        gender: j['gender'] ?? '',
       );
+}
+
+/// female | male | nonbinary from words like "she", "woman" or "M".
+String normalizeGender(String? g) {
+  final t = (g ?? '').trim().toLowerCase();
+  if (t.isEmpty) return '';
+  if (t.startsWith('f') || t.contains('woman') || t.contains('she') || t == 'girl') return 'female';
+  if (t.startsWith('m') || t.contains('man') || t.startsWith('he') || t == 'boy') return 'male';
+  if (t.contains('non') || t.contains('they') || t == 'nb' || t == 'enby') return 'nonbinary';
+  return '';
+}
+
+/// A gender guess from a description's pronouns and nouns ('' when unclear).
+String genderFromText(String text) {
+  final t = ' ${text.toLowerCase()} ';
+  int count(List<String> words) => words.fold(0, (n, w) => n + RegExp('\\b$w\\b').allMatches(t).length);
+  final f = count(['she', 'her', 'hers', 'herself', 'woman', 'girl', 'lady', 'queen', 'mother', 'daughter', 'sister', 'wife', 'priestess', 'witch', 'duchess', 'baroness', 'matron']);
+  final m = count(['he', 'him', 'his', 'himself', 'man', 'boy', 'lord', 'king', 'father', 'son', 'brother', 'husband', 'priest', 'duke', 'baron', 'sir']);
+  if (f > m) return 'female';
+  if (m > f) return 'male';
+  return '';
 }
 
 enum QuestStatus { active, completed, failed }
 
+/// One step in a quest's story ("Turn 7: the ledger points to the docks").
+class QuestUpdate {
+  QuestUpdate({required this.text, this.turn = 0, DateTime? at}) : at = at ?? DateTime.now();
+  final String text;
+  final int turn;
+  final DateTime at;
+
+  Map<String, dynamic> toJson() => {'t': text, 'n': turn, 'at': at.millisecondsSinceEpoch};
+  factory QuestUpdate.fromJson(Map<String, dynamic> j) => QuestUpdate(text: j['t'] ?? '', turn: j['n'] ?? 0, at: DateTime.fromMillisecondsSinceEpoch(j['at'] ?? 0));
+}
+
 class Quest {
-  Quest({required this.id, required this.title, this.description = '', this.status = QuestStatus.active});
+  Quest({required this.id, required this.title, this.description = '', this.status = QuestStatus.active, this.startTurn = 0, this.endTurn, this.giver = '', this.reward = '', this.tracked = false, this.note = '', List<QuestUpdate>? updates}) : updates = updates ?? [];
   final String id;
   String title;
   String description;
   QuestStatus status;
 
-  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'desc': description, 'st': status.name};
+  /// When it was given and when it ended (turns).
+  int startTurn;
+  int? endTurn;
+
+  /// Who asked, and what's promised, when the story says.
+  String giver;
+  String reward;
+
+  /// Pinned by the player to the top of the journal.
+  bool tracked;
+
+  /// The player's own note about it.
+  String note;
+  List<QuestUpdate> updates;
+
+  /// Records a step, skipping repeats.
+  void log(String text, int turn) {
+    final t = text.trim();
+    if (t.isEmpty || (updates.isNotEmpty && updates.last.text == t)) return;
+    updates.add(QuestUpdate(text: t, turn: turn));
+    if (updates.length > 40) updates.removeAt(0);
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'desc': description,
+        'st': status.name,
+        if (startTurn != 0) 'start': startTurn,
+        'end': ?endTurn,
+        if (giver.isNotEmpty) 'giver': giver,
+        if (reward.isNotEmpty) 'reward': reward,
+        if (tracked) 'tracked': true,
+        if (note.isNotEmpty) 'note': note,
+        if (updates.isNotEmpty) 'updates': updates.map((u) => u.toJson()).toList(),
+      };
   factory Quest.fromJson(Map<String, dynamic> j) => Quest(
         id: j['id'] ?? newId(),
         title: j['title'] ?? 'Quest',
         description: j['desc'] ?? '',
         status: QuestStatus.values.firstWhere((s) => s.name == j['st'], orElse: () => QuestStatus.active),
+        startTurn: (j['start'] as num?)?.toInt() ?? 0,
+        endTurn: (j['end'] as num?)?.toInt(),
+        giver: j['giver'] ?? '',
+        reward: j['reward'] ?? '',
+        tracked: j['tracked'] ?? false,
+        note: j['note'] ?? '',
+        updates: [for (final u in (j['updates'] as List? ?? const [])) QuestUpdate.fromJson(Map<String, dynamic>.from(u))],
       );
 }
 
@@ -554,7 +640,7 @@ class Adventure with WorldData implements StoryRecord {
       Npc(id: c.id, name: c.name, role: 'Companion · ${c.classSummary}',
         raceId: c.raceId, portrait: c.portrait, disposition: bonds[c.id]?.friendship ?? 20,
         description: '${c.appearance} ${c.personality} ${c.backstory}',
-        notes: c.notes, alive: !c.dead),
+        notes: c.notes, alive: !c.dead, gender: normalizeGender(c.pronouns)),
     for (final n in npcs)
       if (companionNamed(n.name) == null) n,
   ];

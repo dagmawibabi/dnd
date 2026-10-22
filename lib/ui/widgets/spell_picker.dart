@@ -85,10 +85,10 @@ class _SpellPickerState extends State<SpellPicker> {
       ),
       if (levels.length > 1) ...[
         const SizedBox(height: 12),
-        Wrap(spacing: 6, runSpacing: 6, children: [
+        CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
           ChoiceChip(label: const Text('All'), selected: _level < 0, onSelected: (_) => setState(() => _level = -1)),
           for (final l in levels) ChoiceChip(label: Text('Level $l'), selected: _level == l, onSelected: (_) => setState(() => _level = l)),
-        ]),
+        ])),
       ],
       if (cantripMax > 0 && _level <= 0) ...[
         _counter('Cantrips', c.cantripsChosen, cantripMax),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import '../../../models/world.dart' show MediaItem;
 import '../../../services/settings.dart';
 import '../../../services/studio.dart';
 import '../../../theme/ui.dart';
+import '../../widgets/error_card.dart';
 import '../../widgets/media_import.dart';
 import '../../widgets/portrait.dart';
 
@@ -285,7 +287,17 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   })();
                   if (context.mounted) showToast(context, err ?? 'Map saved to your gallery', icon: err == null ? Icons.check_circle_outline : Icons.error_outline);
                 case 'ai':
-                  ctl.generateMapImage();
+                  setState(() => _showAi = true);
+                  images.resume();
+                  showToast(context, 'Painting your map. This takes up to a minute.', icon: Icons.brush_outlined);
+                  await ctl.generateMapImage();
+                  if (!context.mounted) return;
+                  final err = images.errors['map_${ctl.storyId}'];
+                  if (err != null) {
+                    showIssueSheet(context, err, label: 'Map');
+                  } else if (m.aiImagePath != null) {
+                    showToast(context, 'Your map is painted', icon: Icons.check_circle_outline);
+                  }
                 case 'own':
                   final picked = await chooseImages(context, title: 'A picture for this map');
                   if (picked.isEmpty) return;
@@ -375,6 +387,8 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
               ),
             ),
           ),
+          if (images.isBusy('map_${ctl.storyId}'))
+            const Positioned(left: 12, right: 72, top: 12, child: _PaintingBanner(label: 'Painting your map')),
           Positioned(
             right: 12,
             top: 12,
@@ -727,7 +741,7 @@ Future<MapPin?> showPinEditor(BuildContext context, MapPin pin, {bool isNew = fa
             const SizedBox(height: 10),
             TextField(controller: note, minLines: 2, maxLines: 5, style: T.body(), decoration: const InputDecoration(labelText: 'Note')),
             const SizedBox(height: 14),
-            Wrap(spacing: 6, runSpacing: 6, children: [
+            CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
               for (var i = 0; i < pinIcons.length; i++)
                 ChoiceChip(
                   showCheckmark: false,
@@ -735,7 +749,7 @@ Future<MapPin?> showPinEditor(BuildContext context, MapPin pin, {bool isNew = fa
                   selected: i == icon,
                   onSelected: (_) => set(() => icon = i),
                 ),
-            ]),
+            ])),
             const SizedBox(height: 12),
             Wrap(spacing: 10, children: [
               for (var i = 0; i < pinColors.length; i++)
@@ -769,6 +783,61 @@ Future<MapPin?> showPinEditor(BuildContext context, MapPin pin, {bool isNew = fa
       ),
     ),
   );
+}
+
+/// Progress while an AI map is painted: an animated bar and the time so far.
+class _PaintingBanner extends StatefulWidget {
+  const _PaintingBanner({required this.label});
+  final String label;
+
+  @override
+  State<_PaintingBanner> createState() => _PaintingBannerState();
+}
+
+class _PaintingBannerState extends State<_PaintingBanner> {
+  final _sw = Stopwatch()..start();
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _sw.elapsed.inSeconds;
+    // Image models usually answer in 10-40 seconds: fill the bar toward that.
+    final guess = (s / 40).clamp(0.0, 0.92);
+    final stage = s < 4 ? 'Sketching the coastline' : s < 12 ? 'Inking roads and rivers' : s < 24 ? 'Lettering the places' : 'Adding the final touches';
+    return Material(
+      color: AppColors.surface.withValues(alpha: 0.95),
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 10),
+            Expanded(child: Text('${widget.label}…', style: T.small(color: AppColors.text))),
+            Text('${s}s', style: T.caption()),
+          ]),
+          const SizedBox(height: 8),
+          ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: guess, minHeight: 4, color: AppColors.accent, backgroundColor: AppColors.border)),
+          const SizedBox(height: 6),
+          Text('$stage · you can keep exploring, it appears here when done', style: T.caption()),
+        ]),
+      ),
+    );
+  }
 }
 
 class _Hint extends StatelessWidget {

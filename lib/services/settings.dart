@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/tale_genres.dart';
 import '../theme/app_theme.dart';
 import 'ai/gateway_client.dart';
 
@@ -83,6 +84,10 @@ class SettingsController extends ChangeNotifier {
   bool aiScenes = true;
   bool aiMaps = false;
   bool aiAutoImages = true;
+
+  /// When scene art is painted automatically: 'every' new scene, only new
+  /// 'places' (a new kind of environment), or 'manual' (only when asked).
+  String sceneArt = 'places';
   int dailyTokenLimit = 0;
   double dailyCostLimit = 0;
   int adventureTokenLimit = 0;
@@ -100,6 +105,15 @@ class SettingsController extends ChangeNotifier {
   double sfxVolume = 0.8;
   double musicVolume = 0.45;
   bool ambienceEnabled = true;
+
+  /// Text adventure genres the player made: id, name, tagline, style, health, scene, icon, color.
+  List<Map<String, dynamic>> customGenres = [];
+
+  /// D&D settings the player made: name, place (scene painter location), details.
+  List<Map<String, String>> customSettings = [];
+
+  /// Hide the status and navigation bars while playing.
+  bool fullscreen = false;
 
   /// What the home screen shows: 'dnd' or 'tales'.
   String homeMode = 'dnd';
@@ -121,6 +135,17 @@ class SettingsController extends ChangeNotifier {
   double readingScale = 1.0;
   double typeSpeed = 1.0;
   Verbosity verbosity = Verbosity.balanced;
+
+  /// How hard reasoning models think: 'auto' (the model's default), 'off',
+  /// 'low', 'medium' or 'high'.
+  String thinking = 'low';
+
+  /// Seconds a model may think before it is stopped and asked again with
+  /// thinking off (0: no limit).
+  int thinkingSeconds = 30;
+
+  /// Most tokens one reply may use, thinking included (0: no cap).
+  int maxReplyTokens = 0;
   double temperature = 0.9;
   bool matureContent = false;
   bool streaming = true;
@@ -140,6 +165,10 @@ class SettingsController extends ChangeNotifier {
   double ttsPitch = 1.0;
   String ttsVoice = '';
   bool npcVoices = true;
+
+  /// Reading speed for every voice (1 = normal). AI audio plays faster or
+  /// slower; the device voice speaks faster or slower.
+  double narrationSpeed = 1.15;
 
   // Accessibility
   double textScale = 1.0;
@@ -181,6 +210,10 @@ class SettingsController extends ChangeNotifier {
   bool get useAiCompanionPortraits => useAiImages && aiCompanionPortraits;
   bool get useAiScenes => useAiImages && aiScenes;
 
+  /// One-tap AI pictures (avatars, items, covers) work with any key that can
+  /// use the image model, even when pictures aren't painted automatically.
+  bool get canPaint => hasApiKey && canUse(imageModel);
+
   AiMode get aiMode {
     if (!hasApiKey) return AiMode.none;
     final img = imageMode == ImageMode.ai;
@@ -200,7 +233,11 @@ class SettingsController extends ChangeNotifier {
   void _apply() {
     GatewayClient.openRouterKey = openRouterKey;
     GatewayClient.lmStudioUrl = lmStudioUrl;
+    GatewayClient.thinking = thinking;
+    GatewayClient.thinkingSeconds = thinkingSeconds;
+    GatewayClient.maxReplyTokens = maxReplyTokens;
     T.readingFont = taleTypewriterFont && readingFont == 'serif' ? 'mono' : readingFont;
+    customTaleGenres = [for (final g in customGenres) genreFromJson(g)];
     T.readingScale = readingScale;
   }
 
@@ -250,6 +287,7 @@ class SettingsController extends ChangeNotifier {
       aiScenes = j['aiScenes'] ?? true;
       aiMaps = j['aiMaps'] ?? false;
       aiAutoImages = j['aiAutoImages'] ?? true;
+      sceneArt = j['sceneArt'] ?? 'places';
       dailyTokenLimit = (j['dailyTokenLimit'] as num?)?.toInt() ?? 0;
       dailyCostLimit = (j['dailyCostLimit'] as num?)?.toDouble() ?? 0;
       adventureTokenLimit = (j['adventureTokenLimit'] as num?)?.toInt() ?? 0;
@@ -266,6 +304,9 @@ class SettingsController extends ChangeNotifier {
       musicVolume = (j['musicVol'] ?? 0.45).toDouble();
       ambienceEnabled = j['amb'] ?? true;
       homeMode = j['home'] ?? 'dnd';
+      customGenres = [for (final g in (j['genres'] as List? ?? const [])) Map<String, dynamic>.from(g)];
+      customSettings = [for (final g in (j['dndSettings'] as List? ?? const [])) Map<String, String>.from(g)];
+      fullscreen = j['fullscreen'] ?? false;
       taleTypewriterFont = j['taleMono'] ?? false;
       taleTerminal = j['taleTerm'] ?? false;
       ambienceVolume = (j['ambVol'] ?? 0.35).toDouble();
@@ -277,6 +318,9 @@ class SettingsController extends ChangeNotifier {
       typeSpeed = (j['typeSpeed'] ?? 1.0).toDouble();
       verbosity = Verbosity.values.firstWhere((v) => v.name == j['verbosity'], orElse: () => Verbosity.balanced);
       temperature = (j['temp'] ?? 0.9).toDouble();
+      thinking = j['thinking'] ?? thinking;
+      thinkingSeconds = (j['thinkSecs'] as num?)?.toInt() ?? thinkingSeconds;
+      maxReplyTokens = (j['maxReply'] as num?)?.toInt() ?? 0;
       matureContent = j['mature'] ?? false;
       streaming = j['stream'] ?? true;
       autoRollEnemies = j['autoRoll'] ?? true;
@@ -289,6 +333,7 @@ class SettingsController extends ChangeNotifier {
       ttsPitch = (j['ttsPitch'] ?? 1.0).toDouble();
       ttsVoice = j['ttsVoice'] ?? '';
       npcVoices = j['npcVoices'] ?? true;
+      narrationSpeed = (j['narrSpeed'] as num?)?.toDouble() ?? 1.15;
       textScale = (j['textScale'] ?? 1.0).toDouble();
       reducedMotion = j['reducedMotion'] ?? false;
       highContrast = j['highContrast'] ?? false;
@@ -342,6 +387,7 @@ class SettingsController extends ChangeNotifier {
         'aiScenes': aiScenes,
         'aiMaps': aiMaps,
         'aiAutoImages': aiAutoImages,
+        'sceneArt': sceneArt,
         'dailyTokenLimit': dailyTokenLimit,
         'dailyCostLimit': dailyCostLimit,
         'adventureTokenLimit': adventureTokenLimit,
@@ -358,6 +404,9 @@ class SettingsController extends ChangeNotifier {
         'musicVol': musicVolume,
         'amb': ambienceEnabled,
         'home': homeMode,
+        if (customGenres.isNotEmpty) 'genres': customGenres,
+        if (customSettings.isNotEmpty) 'dndSettings': customSettings,
+        'fullscreen': fullscreen,
         'taleMono': taleTypewriterFont,
         'taleTerm': taleTerminal,
         'ambVol': ambienceVolume,
@@ -369,6 +418,9 @@ class SettingsController extends ChangeNotifier {
         'typeSpeed': typeSpeed,
         'verbosity': verbosity.name,
         'temp': temperature,
+        'thinking': thinking,
+        'thinkSecs': thinkingSeconds,
+        'maxReply': maxReplyTokens,
         'mature': matureContent,
         'stream': streaming,
         'autoRoll': autoRollEnemies,
@@ -381,6 +433,7 @@ class SettingsController extends ChangeNotifier {
         'ttsPitch': ttsPitch,
         'ttsVoice': ttsVoice,
         'npcVoices': npcVoices,
+        'narrSpeed': narrationSpeed,
         'textScale': textScale,
         'reducedMotion': reducedMotion,
         'highContrast': highContrast,

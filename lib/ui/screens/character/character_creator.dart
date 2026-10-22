@@ -216,14 +216,14 @@ class _CharacterCreatorState extends State<CharacterCreator> {
         const SizedBox(height: 10),
         Text('MAIN WEAPON', style: T.overline()),
         const SizedBox(height: 6),
-        Wrap(spacing: 6, runSpacing: 6, children: [
+        CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
           for (final w in weapons)
             ChoiceChip(
               label: Text('${w.name} · ${w.damage}'),
               selected: (_weaponId ?? kitWeapon?.id) == w.id,
               onSelected: (_) => setState(() => _weaponId = w.id),
             ),
-        ]),
+        ])),
       ] else ...[
         Row(children: [
           Expanded(child: Text('Spend your starting gold on gear. Unspent coins stay in your purse.', style: T.small())),
@@ -432,10 +432,10 @@ class _CharacterCreatorState extends State<CharacterCreator> {
             const SizedBox(height: 14),
             TextField(controller: ctrl, autofocus: true, minLines: 2, maxLines: 4, style: T.body(), decoration: const InputDecoration(hintText: 'A retired pirate who found religion; a nervous elf wizard who collects bugs')),
             const SizedBox(height: 10),
-            Wrap(spacing: 6, runSpacing: 6, children: [
+            CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
               for (final s in const ['A grumpy dwarf healer', 'A charming halfling con artist', 'A tiefling knight seeking redemption', 'A feral elf raised by wolves', 'A scholarly dragonborn sorcerer'])
                 ActionChip(label: Text(s), onPressed: () => ctrl.text = s),
-            ]),
+            ])),
             const SizedBox(height: 16),
             AppButton(label: 'Create', icon: Icons.auto_awesome, kind: ButtonKind.accent, onPressed: () => Navigator.pop(ctx, ctrl.text)),
             const SizedBox(height: 8),
@@ -464,7 +464,7 @@ class _CharacterCreatorState extends State<CharacterCreator> {
         final c = _build();
         final prompt = (j['image_prompt'] ?? '').toString();
         final path = await images.generate('portrait_creator', 'Portrait of ${c.name}, a ${c.raceLabel} ${_class.name}. ${prompt.isNotEmpty ? prompt : _appearance}');
-        if (path != null) _portrait.aiImagePath = path;
+        if (path != null) _portrait.useAiImage(path);
         if (mounted && path == null && images.errors['portrait_creator'] != null) {
           showToast(context, 'Character created. Portrait failed: ${images.errors['portrait_creator']}', icon: Icons.error_outline);
         }
@@ -684,9 +684,9 @@ class _CharacterCreatorState extends State<CharacterCreator> {
                         for (final t in r.traits) Text('• $t', style: T.small()),
                         if (r.subraces.isNotEmpty) ...[
                           const SizedBox(height: 12),
-                          Wrap(spacing: 6, runSpacing: 6, children: [
+                          CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
                             for (final s in r.subraces) ChoiceChip(label: Text(s.name), selected: _subraceId == s.id, onSelected: (_) => setState(() => _subraceId = s.id)),
-                          ]),
+                          ])),
                         ],
                       ],
                     ]),
@@ -928,7 +928,7 @@ class _CharacterCreatorState extends State<CharacterCreator> {
         _hint('Choose ${_class.numSkills} skills. ${_bg.name} already gives you ${_bg.skills.map((s) => s.label).join(' and ')}.'),
         Text('${_skills.length} of ${_class.numSkills} selected', style: T.caption()),
         const SizedBox(height: 12),
-        Wrap(spacing: 8, runSpacing: 8, children: [
+        CompactChips(child: Wrap(spacing: 8, runSpacing: 8, children: [
           for (final s in available)
             FilterChip(
               label: Text(s.label),
@@ -943,7 +943,7 @@ class _CharacterCreatorState extends State<CharacterCreator> {
                 }
               }),
             ),
-        ]),
+        ])),
         if (caster) ...[
           const SectionLabel('Spells'),
           SpellPicker(character: _draftFor(), onChanged: () => setState(() {})),
@@ -978,7 +978,7 @@ class _CharacterCreatorState extends State<CharacterCreator> {
                   final c = _build();
                   final path = await images.generate(key, 'Portrait of ${c.name}, a ${c.raceLabel} ${_class.name} (${c.pronouns}). ${_persCtrl.text}');
                   if (!mounted) return;
-                  if (path != null) setState(() => _portrait.aiImagePath = path);
+                  if (path != null) setState(() => _portrait.useAiImage(path));
                   if (mounted && images.errors[key] != null) showToast(context, images.errors[key]!, icon: Icons.error_outline);
                 },
               ),
@@ -1039,7 +1039,7 @@ class _CharacterCreatorState extends State<CharacterCreator> {
       final bytes = await f.readAsBytes();
       if (!mounted) return;
       final path = await context.read<ImageService>().savePhoto(bytes);
-      setState(() => _portrait.aiImagePath = path);
+      setState(() => _portrait.useAiImage(path));
     } catch (e) {
       if (mounted) showToast(context, 'Couldn\'t open the ${source == ImageSource.camera ? 'camera' : 'gallery'}: $e', icon: Icons.error_outline);
     }
@@ -1103,9 +1103,9 @@ class _CharacterCreatorState extends State<CharacterCreator> {
           onSelectionChanged: (v) => setState(() => _pronouns = v.first),
         ),
         const SectionLabel('Alignment'),
-        Wrap(spacing: 6, runSpacing: 6, children: [
+        CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
           for (final a in alignments) ChoiceChip(label: Text(a), selected: _alignment == a, onSelected: (_) => setState(() => _alignment = a)),
-        ]),
+        ])),
         const SectionLabel('Personality'),
         TextField(controller: _persCtrl, style: T.body(), decoration: const InputDecoration(hintText: 'Brave, sarcastic, loyal to a fault')),
         SectionLabel(

@@ -296,10 +296,10 @@ class _MusicStudioScreenState extends State<MusicStudioScreen> with SingleTicker
         ParamSlider(label: 'Reverb', value: s.reverb, min: 0, max: 0.9, help: 'From a dry room to a great hall', format: (v) => '${(v * 100).round()}%', onChanged: (v) => _setSpec(s.copy({'reverb': v}))),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: Wrap(spacing: 6, runSpacing: 6, children: [
+          child: CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final (k, label, on) in [('pad', 'Pad', s.pad), ('bass', 'Bass', s.bass), ('drums', 'Drums', s.drums), ('birds', 'Birdsong', s.birds), ('drips', 'Water drips', s.drips)])
               FilterChip(label: Text(label), selected: on, onSelected: (v) => _setSpec(s.copy({k: v}))),
-          ]),
+          ])),
         ),
         const SizedBox(height: 24),
         Padding(

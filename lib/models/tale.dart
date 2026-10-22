@@ -160,6 +160,8 @@ class Tale with WorldData implements StoryRecord {
     pendingNotes = o.pendingNotes;
     bonds = o.bonds;
     chronicle = o.chronicle;
+    vitals = o.vitals;
+    profiles = o.profiles;
   }
 
   /// Adds or updates a canon entry by name.
@@ -283,7 +285,12 @@ class Tale with WorldData implements StoryRecord {
         'usage': usage,
         'preset': presetId,
         'play': playSeconds,
+        if (premise.isNotEmpty) 'premise': premise,
+        if (coverPath != null) 'cover': coverPath,
       };
+
+  /// The picture that stands for this story: its first painted scene.
+  String? get coverPath => gallery.where((m) => m.kind == 'scene' && !m.video).firstOrNull?.path ?? sceneImagePath;
 }
 
 class TaleSummary {
@@ -301,4 +308,6 @@ class TaleSummary {
   DateTime get updatedAt => DateTime.tryParse(j['updated'] ?? '') ?? DateTime.now();
   Map<String, num> get usage => Map<String, num>.from(j['usage'] ?? const {});
   int get playSeconds => (j['play'] as num?)?.toInt() ?? 0;
+  String get premise => j['premise'] ?? '';
+  String? get cover => j['cover'];
 }

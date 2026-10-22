@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../widgets/ai_gate.dart';
 import '../../../art/scene_painter.dart';
+import '../../../data/tale_genres.dart';
 import '../../../game/tale_controller.dart';
 import '../../../models/adventure.dart';
 import '../../../models/tale.dart';
@@ -13,12 +14,17 @@ import '../../../services/settings.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/media_view.dart';
 import '../../widgets/typewriter.dart';
+import '../../widgets/feed_follower.dart';
+import '../../widgets/fullscreen.dart';
+import '../../widgets/image_attach.dart';
 import '../../widgets/error_card.dart';
+import '../../widgets/ai_trace_sheet.dart';
 import '../adventure/adventure_extras.dart' show ChoiceToolbar;
-import '../adventure/log_view.dart' show questOf, showQuestSheet;
+import '../adventure/log_view.dart' show questOf;
 import '../adventure/map_screen.dart';
 import '../../../services/export.dart' show showStoryExport;
 import '../story/notes_screen.dart';
+import '../story/quest_sheet.dart';
 import '../story/story_tools.dart';
 import '../story/story_extras.dart';
 import 'tale_tools.dart';
@@ -38,8 +44,11 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
   late final TaleController _ctl;
   late final AudioService _audio;
   final _input = TextEditingController();
+  final _pics = PendingImages();
   final _focus = FocusNode();
   final _scroll = ScrollController();
+  late final _follow = FeedFollower(_scroll);
+  int _lastLen = 0;
   final Set<String> _animated = {};
   final List<String> _echo = []; // command output (not saved)
   String? _hint;
@@ -69,6 +78,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
     _audio.stopMusic();
     _audio.stopAmbience();
     _input.dispose();
+    _pics.dispose();
     _focus.dispose();
     _scroll.dispose();
     super.dispose();
@@ -77,9 +87,12 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
   void _changed() {
     if (!mounted) return;
     setState(() {});
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients && _scroll.offset > 0) _scroll.animateTo(0, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-    });
+    final log = _ctl.tale.log;
+    if (log.length != _lastLen || _ctl.streaming != null) {
+      if (log.length > _lastLen && log.isNotEmpty && log.last.kind == LogKind.player) _follow.resume();
+      _lastLen = log.length;
+      if (_follow.follow) _follow.reveal();
+    }
   }
 
   TextStyle _mono({Color color = AppColors.text, double size = 14}) => T.monoStory(size, color: color);
@@ -102,7 +115,12 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
     final raw = _input.text.trim();
     _input.clear();
     _focus.requestFocus();
-    if (raw.isEmpty) return;
+    final pics = _pics.take();
+    if (raw.isEmpty && pics.isEmpty) return;
+    if (pics.isNotEmpty) {
+      await _ctl.freeText(raw, images: pics);
+      return;
+    }
     final t = raw.toLowerCase();
     final tale = _ctl.tale;
     final g = _ctl.genre;
@@ -172,8 +190,9 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
   Widget build(BuildContext context) {
     final t = _ctl.tale;
     final g = _ctl.genre;
-    return Scaffold(
-      appBar: AppBar(
+    final full = context.select<SettingsController, bool>((s) => s.fullscreen);
+    return Immersive(child: Scaffold(
+      appBar: full ? null : AppBar(
         titleSpacing: 0,
         title: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => showStoryOverview(context, _ctl), child: Text(t.title, style: T.h3(), overflow: TextOverflow.ellipsis)),
         actions: [
@@ -211,6 +230,11 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
         child: ContentWidth(
           maxWidth: 760,
           child: Column(children: [
+            if (full)
+              FullscreenControls(title: t.title, onTitle: () => showStoryOverview(context, _ctl), actions: [
+                IconButton(tooltip: 'Journal', visualDensity: VisualDensity.compact, icon: const Icon(Icons.book_outlined, size: 20), onPressed: () => showTaleJournal(context, _ctl)),
+                IconButton(tooltip: 'More', visualDensity: VisualDensity.compact, icon: const Icon(Icons.more_horiz, size: 20), onPressed: () => showTaleMenu(context, _ctl)),
+              ]),
             TaleStatusBar(ctl: _ctl, mono: true),
             RecapBanner(host: _ctl, lastPlayed: _lastPlayed),
             Expanded(child: _feed()),
@@ -219,17 +243,19 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
           ]),
         ),
       ),
-    );
+    ));
   }
 
   Widget _feed() {
     final t = _ctl.tale;
     final s = context.watch<SettingsController>();
     final g = _ctl.genre;
+    final streamingNow = (_ctl.streaming ?? '').isNotEmpty;
+    final anchorIdx = streamingNow ? -1 : FeedFollower.anchorIndex(t.log);
     final tail = <Widget>[
       for (final e in _echo) Padding(padding: const EdgeInsets.only(top: 8), child: Text('  $e', style: _mono(color: AppColors.info, size: 13))),
-      if ((_ctl.streaming ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())),
-      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: t.log.isEmpty),
+      if (streamingNow) _follow.anchor(GestureDetector(onTap: () => showAiTrace(context, _ctl), child: Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())))),
+      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: t.log.isEmpty, onTap: () => showAiTrace(context, _ctl)),
       if (_ctl.error != null)
         InkWell(
           onTap: () => showIssueSheet(context, _ctl.error!, label: 'Story', onRetry: _ctl.isAi ? _ctl.retry : null),
@@ -260,12 +286,23 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
         ),
       ],
     ];
-    return ListView.builder(
-      controller: _scroll,
-      reverse: true,
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
-      itemCount: t.log.length + 2,
-      itemBuilder: (ctx, i) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: _follow.onScroll,
+      child: ListView.builder(
+        controller: _scroll,
+        reverse: true,
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+        itemCount: t.log.length + 2,
+        itemBuilder: (ctx, i) {
+          final w = _line(ctx, i, tail, s, g);
+          return i > 0 && i <= t.log.length && t.log.length - i == anchorIdx ? _follow.anchor(w) : w;
+        },
+      ),
+    );
+  }
+
+  Widget _line(BuildContext ctx, int i, List<Widget> tail, SettingsController s, TaleGenre g) {
+        final t = _ctl.tale;
         if (i == 0) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: tail);
         if (i == t.log.length + 1) {
           // Title card, like an old game's boot screen.
@@ -277,7 +314,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
         final e = t.log[t.log.length - i];
         final id = '${e.at.microsecondsSinceEpoch}';
         switch (e.kind) {
-          case LogKind.narration:
+          case LogKind.narration || LogKind.dialogue:
             return GestureDetector(
               onLongPress: () => showPassageSheet(context, _ctl, e),
               child: Padding(
@@ -293,7 +330,14 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
               ),
             );
           case LogKind.player:
-            return Padding(padding: const EdgeInsets.only(top: 14), child: Text('> ${e.text}', style: _mono(color: g.color)));
+            final pics = [for (final p in (e.meta['images'] as List? ?? const [])) p.toString()];
+            return Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('> ${e.text}', style: _mono(color: g.color)),
+                if (pics.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: SentImages(paths: pics, size: 64)),
+              ]),
+            );
           case LogKind.system when e.meta['scene'] != null:
             final art = t.sceneImages[e.text];
             final sc = e.meta['scene'] is Map ? SceneInfo.fromJson(Map<String, dynamic>.from(e.meta['scene'])) : null;
@@ -316,19 +360,19 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
             );
           case LogKind.system when e.meta['bond'] != null:
             return Text('  ♥ ${e.text}', style: _mono(color: const Color(0xFFF472B6), size: 12.5));
-          case LogKind.dialogue || LogKind.companion:
+          case LogKind.companion:
             final who = t.personNamed(e.speaker);
             return InkWell(
               onTap: who == null ? null : () => showCharacterChat(context, _ctl, who),
               child: Padding(
                 padding: const EdgeInsets.only(top: 10),
-                child: Text('${(e.speaker ?? '?').toUpperCase()}: ${e.kind == LogKind.companion ? '"${e.text}"' : e.text}', style: _mono(color: e.kind == LogKind.companion ? AppColors.info : AppColors.text, size: e.kind == LogKind.companion ? 13 : 14)),
+                child: Text('${(e.speaker ?? '?').toUpperCase()}: "${e.text}"', style: _mono(color: AppColors.info, size: 13)),
               ),
             );
           case LogKind.levelup:
             final quest = questOf(e);
             return InkWell(
-              onTap: quest == null ? null : () => showQuestSheet(context, e, onJournal: () => showTaleJournal(context, _ctl)),
+              onTap: quest == null ? null : () => showQuestByTitle(context, _ctl, (quest['title'] ?? '').toString()),
               child: Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 2),
                 child: Text(quest == null ? '  * ${e.text}' : '  [${quest['state'] == 'done' ? 'x' : quest['state'] == 'failed' ? '-' : ' '}] ${(quest['state'] == 'new' ? 'new goal' : quest['state'] == 'done' ? 'goal complete' : 'goal failed').toUpperCase()}: ${quest['title']}', style: _mono(color: g.color, size: 13)),
@@ -344,8 +388,6 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
           default:
             return Text(e.text, style: _mono(color: AppColors.textFaint, size: 13));
         }
-      },
-    );
   }
 
   Widget _actions() {
@@ -357,6 +399,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const NowReading(),
         ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: !t.finished && t.choices.isNotEmpty,
+          trailing: [TaleCastButton(ctl: _ctl)],
           onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed)),
         if (!_choicesCollapsed && !_ctl.busy && !t.finished && t.choices.isNotEmpty)
           ConstrainedBox(
@@ -388,13 +431,14 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
           ),
         if (_hint != null) Padding(padding: const EdgeInsets.only(top: 6, left: 4), child: Text(_hint!, style: _mono(color: AppColors.textFaint, size: 12))),
         const SizedBox(height: 8),
+        if (_ctl.isAi) PendingImagesStrip(pending: _pics),
         Container(
-          padding: const EdgeInsets.only(left: 12, right: 4),
+          padding: const EdgeInsets.only(left: 2, right: 4),
           decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
           child: Row(children: [
-            IconButton(tooltip: 'Story tools', icon: const Icon(Icons.lightbulb_outline, size: 20),
+            IconButton(tooltip: 'Story tools', visualDensity: VisualDensity.compact, icon: const Icon(Icons.lightbulb_outline, size: 20),
               onPressed: () => showStoryActions(context, _ctl)),
-            const SizedBox(width: 10),
+            const SizedBox(width: 2),
             Expanded(
               child: TextField(
                 controller: _input,
@@ -413,6 +457,7 @@ class _TaleTerminalScreenState extends State<TaleTerminalScreen> {
                 onSubmitted: (_) => unawaited(_submit()),
               ),
             ),
+            if (_ctl.isAi) AttachImageButton(pending: _pics, flat: true),
             VoiceInputButton(controller: _input, onSubmit: () => unawaited(_submit()), flat: true),
             IconButton(icon: const Icon(Icons.keyboard_return, size: 18), onPressed: () => unawaited(_submit())),
           ]),

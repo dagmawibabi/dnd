@@ -8,6 +8,7 @@ import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'ai/gateway_client.dart';
+import 'app_lifecycle.dart';
 import 'db/database.dart';
 import 'ai/model_catalog.dart';
 import 'settings.dart';
@@ -139,6 +140,31 @@ class ImageService extends ChangeNotifier {
     return f.path;
   }
 
+  /// Pictures as small JPEG/PNG data URLs, ready to show to an AI that can see.
+  Future<List<String>> dataUrls(List<String> paths, {int maxWidth = 1024}) async {
+    final out = <String>[];
+    for (final p in paths) {
+      if (p.startsWith('data:')) {
+        out.add(p);
+        continue;
+      }
+      final raw = await bytesOf(p);
+      if (raw == null) continue;
+      Uint8List bytes = raw;
+      // Large photos are scaled down so requests stay light.
+      if (raw.length > 400000) {
+        try {
+          final frame = await (await ui.instantiateImageCodec(raw, targetWidth: maxWidth)).getNextFrame();
+          final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+          if (data != null) bytes = data.buffer.asUint8List();
+        } catch (_) {}
+      }
+      final mime = bytes.length > 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 ? 'image/jpeg' : 'image/png';
+      out.add('data:$mime;base64,${base64Encode(bytes)}');
+    }
+    return out;
+  }
+
   /// Bytes of any stored media path (file, `db:` or `data:`).
   Future<Uint8List?> bytesOf(String path) async {
     if (path.startsWith('data:')) return base64Decode(path.substring(path.indexOf(',') + 1));
@@ -194,6 +220,7 @@ class ImageService extends ChangeNotifier {
     errors.remove(key);
     status[key] = 'Starting';
     notifyListeners();
+    final epoch = AppLifecycle.instance.epoch;
     final client = GatewayClient(apiKey: settings.apiKey, category: 'video', target: usageTarget);
     try {
       if (catalog.models.isEmpty) await catalog.ensureLoaded();
@@ -222,7 +249,8 @@ class ImageService extends ChangeNotifier {
       costs[path] = client.spentCost;
       return path;
     } catch (e) {
-      _fail('video', key, e);
+      // Leaving the app drops the connection; the next pass paints it again.
+      if (!AppLifecycle.instance.cutOff(e, epoch)) _fail('video', key, e);
       return null;
     } finally {
       busy.remove(key);
@@ -248,7 +276,10 @@ class ImageService extends ChangeNotifier {
 
   /// [references] are (name, image path) pairs of characters who appear, so
   /// their faces stay the same from picture to picture.
-  Future<String?> generate(String key, String prompt, {String size = '1024x1024', Map<String, num>? usageTarget, String category = 'images', String? style, List<(String, String)> references = const []}) async {
+  ///
+  /// [styleReference] is an earlier picture from the same story whose look
+  /// (not content) the new one should match, so a story's art stays coherent.
+  Future<String?> generate(String key, String prompt, {String size = '1024x1024', Map<String, num>? usageTarget, String category = 'images', String? style, List<(String, String)> references = const [], String? styleReference}) async {
     if (!settings.hasApiKey || !settings.canUse(settings.imageModel)) {
       _fail('image', key, GatewayException('Add a key for ${settings.imageModel} in Settings → AI providers to generate images.'));
       notifyListeners();
@@ -259,6 +290,7 @@ class ImageService extends ChangeNotifier {
     busy.add(key);
     errors.remove(key);
     notifyListeners();
+    final epoch = AppLifecycle.instance.epoch;
     final client = GatewayClient(apiKey: settings.apiKey, category: category, target: usageTarget);
     try {
       if (catalog.models.isEmpty) await catalog.ensureLoaded();
@@ -271,7 +303,7 @@ class ImageService extends ChangeNotifier {
       final refs = <Uint8List>[];
       final names = <String>[];
       if (acceptsImages && (multimodal || AiRoute.isOpenRouter(settings.imageModel))) {
-        for (final (name, path) in references.take(3)) {
+        for (final (name, path) in references.take(5)) {
           final b = await _reference(path);
           if (b != null) {
             refs.add(b);
@@ -283,13 +315,21 @@ class ImageService extends ChangeNotifier {
         prompt = '$prompt\n\nReference images are attached in this order: ${[for (final (i, n) in names.indexed) '${i + 1}) $n'].join(', ')}. '
             'Keep each character\'s face, hair, skin tone, build and outfit exactly consistent with their reference. Do not copy the reference composition or background.';
       }
+      final canRef = acceptsImages && (multimodal || AiRoute.isOpenRouter(settings.imageModel));
+      if (canRef && styleReference != null && !references.any((r) => r.$2 == styleReference)) {
+        final b = await _reference(styleReference);
+        if (b != null) {
+          refs.add(b);
+          prompt = '$prompt\n\nThe ${refs.length == 1 ? 'attached image' : 'last attached image'} is an earlier illustration from this same story. Match its art style, color palette, lighting and level of detail exactly, so both look like the same artist painted them. Do not copy its subject, characters or composition.';
+        }
+      }
       final bytes = await client.generateImage(model: settings.imageModel, prompt: '$prompt\n\nStyle: ${style ?? artStyle}', multimodal: multimodal, size: size, references: refs);
       final path = await _write(key, bytes, 'png');
       costs[path] = client.spentCost;
       tokens[path] = client.spentTokens;
       return path;
     } catch (e) {
-      _fail('image', key, e);
+      if (!AppLifecycle.instance.cutOff(e, epoch)) _fail('image', key, e);
       return null;
     } finally {
       busy.remove(key);

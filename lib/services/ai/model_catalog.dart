@@ -186,7 +186,9 @@ class ModelInfo {
 /// Well-known voices for speech models whose catalog entry doesn't list them.
 List<String> defaultVoicesFor(String modelId) {
   final id = AiRoute.bare(modelId);
-  if (id.startsWith('openai/')) return const ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
+  // tts-1 and tts-1-hd take nine voices; ballad and verse are newer-model only.
+  if (id.startsWith('openai/tts-1')) return const ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
+  if (id.startsWith('openai/')) return const ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
   if (id.startsWith('google/')) return const ['Kore', 'Puck', 'Charon', 'Zephyr', 'Fenrir', 'Leda', 'Orus', 'Aoede', 'Callirrhoe', 'Enceladus'];
   if (id.startsWith('microsoft/')) return const ['en-US-Harper', 'en-US-Ethan', 'en-US-Ava', 'en-US-Andrew', 'en-GB-Sonia', 'en-GB-Ryan'];
   if (id.startsWith('spacexai/') || id.startsWith('x-ai/') || id.startsWith('xai/')) return const ['Ara', 'Eve', 'Leo', 'Rex', 'Sal'];

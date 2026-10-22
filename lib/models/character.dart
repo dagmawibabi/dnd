@@ -27,7 +27,8 @@ class PortraitSpec {
     this.background = 0,
     this.feminine = 0.5,
     this.aiImagePath,
-  });
+    List<String>? aiHistory,
+  }) : aiHistory = aiHistory ?? [];
 
   int seed;
   Color skin;
@@ -40,6 +41,24 @@ class PortraitSpec {
   int background; // palette index
   double feminine;
   String? aiImagePath;
+
+  /// Every AI portrait made for this character, oldest first, so an earlier
+  /// one can be chosen again.
+  List<String> aiHistory;
+
+  /// Shows [path] and keeps it in the history.
+  void useAiImage(String path) {
+    aiImagePath = path;
+    aiHistory.remove(path);
+    aiHistory.add(path);
+    if (aiHistory.length > 24) aiHistory.removeAt(0);
+  }
+
+  /// Past portraits, newest first (including the one in use).
+  List<String> get portraitHistory => [
+        for (final p in aiHistory.reversed) p,
+        if (aiImagePath != null && !aiHistory.contains(aiImagePath)) aiImagePath!,
+      ];
 
   static PortraitSpec random(String raceId, {int? seed}) {
     final s = seed ?? math.Random().nextInt(1 << 30);
@@ -76,6 +95,7 @@ class PortraitSpec {
         'background': background,
         'feminine': feminine,
         'ai': aiImagePath,
+        if (aiHistory.isNotEmpty) 'aiHist': aiHistory,
       };
 
   factory PortraitSpec.fromJson(Map<String, dynamic> j) => PortraitSpec(
@@ -90,6 +110,7 @@ class PortraitSpec {
         background: j['background'] ?? 0,
         feminine: (j['feminine'] ?? 0.5).toDouble(),
         aiImagePath: j['ai'],
+        aiHistory: List<String>.from(j['aiHist'] ?? const []),
       );
 }
 

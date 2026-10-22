@@ -13,6 +13,10 @@ import '../../../services/settings.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/details_sheet.dart';
 import '../../widgets/typewriter.dart';
+import '../../widgets/ai_trace_sheet.dart';
+import '../../widgets/feed_follower.dart';
+import '../../widgets/fullscreen.dart';
+import '../../widgets/image_attach.dart';
 import '../../../services/export.dart';
 import 'adventure_screen.dart';
 import 'adventure_extras.dart';
@@ -41,7 +45,10 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
   // Looked up eagerly: dispose() can't read providers once the tree is unmounting.
   late final AudioService _audio;
   final _scroll = ScrollController();
+  late final _follow = FeedFollower(_scroll);
+  int _lastLogLen = 0;
   final _input = TextEditingController();
+  final _pics = PendingImages();
   final _focus = FocusNode();
   bool _levelOpen = false;
   bool _choicesCollapsed = false;
@@ -68,6 +75,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
     _ctl.dispose();
     _scroll.dispose();
     _input.dispose();
+    _pics.dispose();
     _focus.dispose();
     _audio.stopMusic();
     _audio.stopAmbience();
@@ -91,9 +99,12 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
       });
     }
     setState(() {});
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients && _scroll.offset > 0) _scroll.animateTo(0, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-    });
+    final log = _ctl.adventure.log;
+    if (log.length != _lastLogLen || _ctl.streaming != null) {
+      if (log.length > _lastLogLen && log.isNotEmpty && log.last.kind == LogKind.player) _follow.resume();
+      _lastLogLen = log.length;
+      if (_follow.follow) _follow.reveal();
+    }
   }
 
   TextStyle _mono({Color color = AppColors.text, double size = 14}) => T.monoStory(size, color: color);
@@ -102,8 +113,13 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
     final t = _input.text.trim();
     _input.clear();
     _focus.requestFocus();
-    if (t.isEmpty) return;
+    final pics = _pics.take();
+    if (t.isEmpty && pics.isEmpty) return;
     setState(() => _hint = null);
+    if (pics.isNotEmpty && !_ctl.inCombat) {
+      await _ctl.freeText(t, images: pics);
+      return;
+    }
     final lower = t.toLowerCase();
     if (_ctl.inCombat) {
       await _combatCommand(lower);
@@ -247,8 +263,9 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
   Widget build(BuildContext context) {
     final a = _ctl.adventure;
     final h = a.hero;
-    return Scaffold(
-      appBar: AppBar(
+    final full = context.select<SettingsController, bool>((s) => s.fullscreen);
+    return Immersive(child: Scaffold(
+      appBar: full ? null : AppBar(
         titleSpacing: 0,
         title: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => showStoryOverview(context, _ctl), child: Text(a.title, style: T.h3(), overflow: TextOverflow.ellipsis)),
         actions: [
@@ -302,35 +319,46 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
         child: ContentWidth(
           maxWidth: 760,
           child: Column(children: [
+            if (full)
+              FullscreenControls(title: a.title, onTitle: () => showStoryOverview(context, _ctl), actions: [
+                IconButton(tooltip: 'Status', visualDensity: VisualDensity.compact, icon: const Icon(Icons.monitor_heart_outlined, size: 20), onPressed: () => showVitalsSheet(context, _ctl)),
+                IconButton(tooltip: 'Journal', visualDensity: VisualDensity.compact, icon: const Icon(Icons.book_outlined, size: 20), onPressed: () => showJournalSheet(context, _ctl)),
+              ]),
             Expanded(child: _feed()),
             ApproachBanner(host: _ctl, mono: true),
             _actions(),
           ]),
         ),
       ),
-    );
+    ));
   }
 
   Widget _feed() {
     final a = _ctl.adventure;
     final settings = context.watch<SettingsController>();
+    final streamingNow = (_ctl.streaming ?? '').isNotEmpty;
+    final anchorIdx = streamingNow ? -1 : FeedFollower.anchorIndex(a.log);
     final tail = <Widget>[
-      if ((_ctl.streaming ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())),
-      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: _ctl.adventure.log.isEmpty),
+      if (streamingNow) _follow.anchor(GestureDetector(onTap: () => showAiTrace(context, _ctl), child: Padding(padding: const EdgeInsets.only(top: 12), child: Text(_ctl.streaming!, style: _mono())))),
+      if (_ctl.busy && (_ctl.streaming ?? '').isEmpty) ThinkingIndicator(mono: true, first: _ctl.adventure.log.isEmpty, onTap: () => showAiTrace(context, _ctl)),
       if (_ctl.error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('error: ${_ctl.error}', style: _mono(color: AppColors.danger, size: 13))),
       if (a.finished) Padding(padding: const EdgeInsets.only(top: 16), child: Text(a.hero.dead ? '*** YOU HAVE DIED ***' : '*** THE END ***', style: _mono(color: a.hero.dead ? AppColors.danger : AppColors.accent))),
       if (a.finished) Padding(padding: const EdgeInsets.only(top: 12), child: FinishedActions(controller: _ctl)),
     ];
-    return ListView.builder(
-      controller: _scroll,
-      reverse: true,
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
-      itemCount: a.log.length + 1,
-      itemBuilder: (ctx, i) {
-        if (i == 0) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: tail);
-        final idx = a.log.length - i;
-        return _line(a.log[idx], settings);
-      },
+    return NotificationListener<ScrollNotification>(
+      onNotification: _follow.onScroll,
+      child: ListView.builder(
+        controller: _scroll,
+        reverse: true,
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+        itemCount: a.log.length + 1,
+        itemBuilder: (ctx, i) {
+          if (i == 0) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: tail);
+          final idx = a.log.length - i;
+          final line = _line(a.log[idx], settings);
+          return idx == anchorIdx ? _follow.anchor(line) : line;
+        },
+      ),
     );
   }
 
@@ -346,7 +374,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
           padding: const EdgeInsets.only(top: 12, bottom: 2),
           child: TypewriterText(
             key: ValueKey(id),
-            text: e.speaker != null ? '${e.speaker}: ${e.text}' : e.text,
+            text: e.text,
             animate: settings.typewriter && !_ctl.animated.contains(id),
             speed: settings.typeSpeed * 3,
             onDone: () => _ctl.animated.add(id),
@@ -355,7 +383,14 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
         ),
         );
       case LogKind.player:
-        w = Padding(padding: const EdgeInsets.only(top: 14), child: Text('> ${e.text}', style: _mono(color: AppColors.accent)));
+        final pics = [for (final p in (e.meta['images'] as List? ?? const [])) p.toString()];
+        w = Padding(
+          padding: const EdgeInsets.only(top: 14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('> ${e.text}', style: _mono(color: AppColors.accent)),
+            if (pics.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: SentImages(paths: pics, size: 64)),
+          ]),
+        );
       case LogKind.roll:
         final ok = e.meta['ok'] == true;
         w = Text('  [d20] ${e.meta['label'] ?? 'Roll'}: ${e.meta['total']} vs DC ${e.meta['dc']} — ${ok ? 'success' : 'failure'}', style: _mono(color: ok ? AppColors.success : AppColors.danger, size: 13));
@@ -404,13 +439,14 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
         ],
         if (_hint != null) Padding(padding: const EdgeInsets.only(top: 6, left: 4), child: Text(_hint!, style: _mono(color: AppColors.textFaint, size: 12))),
         const SizedBox(height: 8),
+        if (_ctl.isAi) PendingImagesStrip(pending: _pics),
         Container(
-          padding: const EdgeInsets.only(left: 12, right: 4),
+          padding: const EdgeInsets.only(left: 2, right: 4),
           decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
           child: Row(children: [
-            IconButton(tooltip: 'Story tools', icon: const Icon(Icons.lightbulb_outline, size: 20),
+            IconButton(tooltip: 'Story tools', visualDensity: VisualDensity.compact, icon: const Icon(Icons.lightbulb_outline, size: 20),
               onPressed: () => showStoryActions(context, _ctl)),
-            const SizedBox(width: 10),
+            const SizedBox(width: 2),
             Expanded(
               child: TextField(
                 controller: _input,
@@ -429,6 +465,7 @@ class _TextAdventureScreenState extends State<TextAdventureScreen> {
                 onSubmitted: (_) => _submit(),
               ),
             ),
+            if (_ctl.isAi) AttachImageButton(pending: _pics, flat: true),
             VoiceInputButton(controller: _input, onSubmit: _submit, flat: true),
             IconButton(icon: const Icon(Icons.keyboard_return, size: 18), onPressed: _submit),
           ]),

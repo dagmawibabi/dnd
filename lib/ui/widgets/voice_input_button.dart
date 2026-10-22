@@ -6,6 +6,21 @@ import '../../services/settings.dart';
 import '../../services/voice_input.dart';
 import '../../theme/ui.dart';
 
+/// Rebuilds a message bar as its text changes. [typing] is true once something
+/// is written (not while dictating, so the microphone stays to stop it), so
+/// the bar can hide its picture and microphone buttons and give the box room.
+class ComposerBuilder extends StatelessWidget {
+  const ComposerBuilder({super.key, required this.controller, required this.builder});
+  final TextEditingController controller;
+  final Widget Function(BuildContext context, bool typing) builder;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([controller, VoiceInput.instance]),
+    builder: (context, _) => builder(context, controller.text.trim().isNotEmpty && !VoiceInput.instance.listening),
+  );
+}
+
 /// A microphone that transcribes speech straight into [controller].
 /// The text stays in the box so it can be checked before sending, unless
 /// "Send when you stop speaking" is on.

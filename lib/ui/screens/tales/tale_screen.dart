@@ -15,12 +15,17 @@ import '../../../theme/ui.dart';
 import '../../../art/render_png.dart';
 import '../../widgets/media_view.dart';
 import '../../widgets/typewriter.dart';
+import '../../widgets/feed_follower.dart';
+import '../../widgets/fullscreen.dart';
+import '../../widgets/image_attach.dart';
 import '../../widgets/error_card.dart';
+import '../../widgets/ai_trace_sheet.dart';
 import '../../../services/image_service.dart';
 import '../adventure/adventure_extras.dart' show ChoiceToolbar;
 import '../adventure/log_view.dart';
 import '../adventure/map_screen.dart';
 import '../../../services/export.dart' show showStoryExport;
+import '../story/quest_sheet.dart';
 import '../story/story_tools.dart';
 import '../story/story_extras.dart';
 import 'tale_tools.dart';
@@ -42,7 +47,9 @@ class _TaleScreenState extends State<TaleScreen> {
   late final AudioService _audio;
   late final DateTime _lastPlayed = widget.tale.updatedAt;
   final _input = TextEditingController();
+  final _pics = PendingImages();
   final _scroll = ScrollController();
+  late final _follow = FeedFollower(_scroll);
   final Set<String> _animated = {};
   int _lastLen = 0;
   bool _choicesCollapsed = false;
@@ -71,17 +78,19 @@ class _TaleScreenState extends State<TaleScreen> {
     _audio.stopMusic();
     _audio.stopAmbience();
     _input.dispose();
+    _pics.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
   void _changed() {
     if (!mounted) return;
-    if (_ctl.tale.log.length != _lastLen || _ctl.streaming != null) {
-      _lastLen = _ctl.tale.log.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scroll.hasClients && _scroll.offset > 0) _scroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-      });
+    final log = _ctl.tale.log;
+    if (log.length != _lastLen || _ctl.streaming != null) {
+      // The player acted: follow the reply again, from its first line.
+      if (log.length > _lastLen && log.isNotEmpty && log.last.kind == LogKind.player) _follow.resume();
+      _lastLen = log.length;
+      if (_follow.follow) _follow.reveal();
     }
     setState(() {});
   }
@@ -99,8 +108,8 @@ class _TaleScreenState extends State<TaleScreen> {
     final t = _ctl.tale;
     final g = _ctl.genre;
     final s = context.watch<SettingsController>();
-    return Scaffold(
-      appBar: AppBar(
+    return Immersive(child: Scaffold(
+      appBar: s.fullscreen ? null : AppBar(
         titleSpacing: 0,
         title: GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -125,6 +134,12 @@ class _TaleScreenState extends State<TaleScreen> {
       body: SafeArea(
         top: false,
         child: Column(children: [
+          if (s.fullscreen)
+            FullscreenControls(title: t.title, onTitle: () => showStoryOverview(context, _ctl), actions: [
+              IconButton(tooltip: 'Map', visualDensity: VisualDensity.compact, icon: const Icon(Icons.map_outlined, size: 20), onPressed: () => openMapScreen(context, _ctl)),
+              IconButton(tooltip: 'Journal', visualDensity: VisualDensity.compact, icon: const Icon(Icons.book_outlined, size: 20), onPressed: () => showTaleJournal(context, _ctl)),
+              IconButton(tooltip: 'More', visualDensity: VisualDensity.compact, icon: const Icon(Icons.more_horiz, size: 20), onPressed: () => showTaleMenu(context, _ctl)),
+            ]),
           ContentWidth(maxWidth: 720, child: TaleStatusBar(ctl: _ctl)),
           ContentWidth(maxWidth: 720, child: RecapBanner(host: _ctl, lastPlayed: _lastPlayed)),
           Expanded(child: ContentWidth(maxWidth: 720, child: _feed(s, g))),
@@ -132,7 +147,7 @@ class _TaleScreenState extends State<TaleScreen> {
           ContentWidth(maxWidth: 720, child: _bottom(s, g)),
         ]),
       ),
-    );
+    ));
   }
 
   Widget _cover(TaleGenre g) {
@@ -173,15 +188,28 @@ class _TaleScreenState extends State<TaleScreen> {
     final t = _ctl.tale;
     final items = t.log.length + 2;
     final lastScene = t.log.lastIndexWhere((e) => e.meta['scene'] is Map);
-    return ListView.builder(
-      controller: _scroll,
-      reverse: true,
-      padding: const EdgeInsets.fromLTRB(22, 8, 22, 24),
-      itemCount: items,
-      itemBuilder: (ctx, i) {
+    final streamingNow = (_ctl.streaming ?? '').isNotEmpty;
+    final anchorIdx = streamingNow ? -1 : FeedFollower.anchorIndex(t.log);
+    return NotificationListener<ScrollNotification>(
+      onNotification: _follow.onScroll,
+      child: ListView.builder(
+        controller: _scroll,
+        reverse: true,
+        padding: const EdgeInsets.fromLTRB(22, 8, 22, 24),
+        itemCount: items,
+        itemBuilder: (ctx, i) {
+          final w = _item(ctx, i, s, g, items, lastScene);
+          return i > 0 && i < items - 1 && t.log.length - i == anchorIdx ? _follow.anchor(w) : w;
+        },
+      ),
+    );
+  }
+
+  Widget _item(BuildContext ctx, int i, SettingsController s, TaleGenre g, int items, int lastScene) {
+        final t = _ctl.tale;
         if (i == 0) {
-          if ((_ctl.streaming ?? '').isNotEmpty) return Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: _reading(s)));
-          if (_ctl.busy) return ThinkingIndicator(first: t.log.isEmpty);
+          if ((_ctl.streaming ?? '').isNotEmpty) return _follow.anchor(GestureDetector(onTap: () => showAiTrace(context, _ctl), child: Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: _reading(s)))));
+          if (_ctl.busy) return ThinkingIndicator(first: t.log.isEmpty, onTap: () => showAiTrace(context, _ctl));
           if (_ctl.error != null) return ErrorCard(error: _ctl.error!, label: 'Story', onRetry: _ctl.isAi ? _ctl.retry : null);
           final imgErr = context.watch<ImageService>().errors.entries.where((e) => e.key.contains(t.id)).firstOrNull;
           if (imgErr != null) {
@@ -218,11 +246,15 @@ class _TaleScreenState extends State<TaleScreen> {
               ),
             );
           case LogKind.player:
+            final pics = [for (final p in (e.meta['images'] as List? ?? const [])) p.toString()];
             return Padding(
               padding: const EdgeInsets.only(top: 14, bottom: 4),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('›  ', style: T.h3(color: g.color)),
-                Expanded(child: Text(e.text, style: T.body(color: g.color).copyWith(fontWeight: FontWeight.w600))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('›  ', style: T.h3(color: g.color)),
+                  Expanded(child: Text(e.text, style: T.body(color: g.color).copyWith(fontWeight: FontWeight.w600))),
+                ]),
+                if (pics.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6, left: 22), child: SentImages(paths: pics, size: 80)),
               ]),
             );
           case LogKind.system when e.meta['scene'] == true:
@@ -245,6 +277,7 @@ class _TaleScreenState extends State<TaleScreen> {
               onTalk: (npc) => showCharacterChat(context, _ctl, npc),
               onJournal: () => showTaleJournal(context, _ctl),
               onPassage: (e) => showPassageSheet(context, _ctl, e),
+              onQuest: (t) => showQuestByTitle(context, _ctl, t),
             );
           case LogKind.loot:
             return Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text('+ ${e.text}', style: T.small(color: AppColors.success)));
@@ -256,7 +289,7 @@ class _TaleScreenState extends State<TaleScreen> {
               child: Text('${e.text} (${e.meta['chance']}% chance)', style: T.small(color: e.meta['ok'] == true ? AppColors.success : AppColors.warning)),
             );
           case LogKind.levelup when questOf(e) != null:
-            return QuestCard(entry: e, onJournal: () => showTaleJournal(context, _ctl));
+            return QuestCard(entry: e, onJournal: () => showTaleJournal(context, _ctl), onQuest: (t) => showQuestByTitle(context, _ctl, t));
           case LogKind.levelup:
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
@@ -269,8 +302,6 @@ class _TaleScreenState extends State<TaleScreen> {
           default:
             return Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Text(e.text, style: T.small()));
         }
-      },
-    );
   }
 
   Widget _ending(TaleGenre g) {
@@ -315,6 +346,7 @@ class _TaleScreenState extends State<TaleScreen> {
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const NowReading(),
         ChoiceToolbar(host: _ctl, collapsed: _choicesCollapsed, hasChoices: t.choices.isNotEmpty,
+          trailing: [TaleCastButton(ctl: _ctl)],
           onToggle: () => setState(() => _choicesCollapsed = !_choicesCollapsed)),
         if (!disabled && !_choicesCollapsed)
           ConstrainedBox(
@@ -346,7 +378,8 @@ class _TaleScreenState extends State<TaleScreen> {
             ),
           ),
         const SizedBox(height: 4),
-        Row(children: [
+        if (_ctl.isAi) PendingImagesStrip(pending: _pics),
+        ComposerBuilder(controller: _input, builder: (context, typing) => Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           CircleIconButton(icon: Icons.lightbulb_outline, size: 44, tooltip: 'Story tools', onPressed: () => showStoryActions(context, _ctl)),
           const SizedBox(width: 8),
           if (_ctl.isAi) ...[
@@ -355,9 +388,12 @@ class _TaleScreenState extends State<TaleScreen> {
                 controller: _input,
                 enabled: !disabled,
                 style: T.body(),
+                minLines: 1,
+                maxLines: typing ? 6 : 1,
                 textInputAction: TextInputAction.send,
                 decoration: InputDecoration(
                   hintText: 'Or write what you do…',
+                  suffixIcon: typing ? null : AttachImageButton(pending: _pics, flat: true, enabled: !disabled),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: const BorderSide(color: AppColors.border)),
                   enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: const BorderSide(color: AppColors.border)),
@@ -366,12 +402,14 @@ class _TaleScreenState extends State<TaleScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            VoiceInputButton(controller: _input, onSubmit: _send, enabled: !disabled),
-            if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
+            if (!typing) ...[
+              VoiceInputButton(controller: _input, onSubmit: _send, enabled: !disabled),
+              if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
+            ],
             CircleIconButton(icon: Icons.arrow_upward, size: 44, tooltip: 'Send', onPressed: disabled ? null : _send),
           ] else
             Expanded(child: Text('Handcrafted story · tap a choice', style: T.caption())),
-        ]),
+        ])),
       ]),
     );
   }
@@ -379,6 +417,6 @@ class _TaleScreenState extends State<TaleScreen> {
   void _send() {
     final text = _input.text;
     _input.clear();
-    unawaited(_ctl.freeText(text));
+    unawaited(_ctl.freeText(text, images: _pics.take()));
   }
 }

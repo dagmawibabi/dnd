@@ -78,14 +78,14 @@ class _LevelUpSheetState extends State<_LevelUpSheet> {
   }
 
   Widget _abilityPicker({required Ability? value, required ValueChanged<Ability> onPick, required int bonus, Ability? exclude}) {
-    return Wrap(spacing: 6, runSpacing: 6, children: [
+    return CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
       for (final a in Ability.values)
         ChoiceChip(
           label: Text('${a.short} ${c.score(a)}${value == a ? ' → ${(c.score(a) + bonus).clamp(0, 20)}' : ''}'),
           selected: value == a,
           onSelected: (c.score(a) + bonus > 20 || a == exclude) ? null : (_) => setState(() => onPick(a)),
         ),
-    ]);
+    ]));
   }
 
   @override

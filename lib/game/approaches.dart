@@ -34,6 +34,8 @@ Approach? pickApproach(StoryHost host, {Set<String> close = const {}, bool atCam
   final w = host.world;
   final r = rng ?? math.Random();
   if (w.lastApproachTurn >= 0 && host.turns - w.lastApproachTurn < (atCamp ? 2 : approachCooldown) && w.lastApproachTurn <= host.turns) return null;
+  // Nobody pulls you aside mid-fight or in a tense standoff; camp is always fine.
+  if (!atCamp && const {'combat', 'tense'}.contains(host.scene.mood)) return null;
   final options = <Approach>[];
   for (final p in host.people) {
     if (!p.alive || w.unreadChats.contains(p.id)) continue;
@@ -75,7 +77,7 @@ Approach? pickApproach(StoryHost host, {Set<String> close = const {}, bool atCam
         person: p,
         topic: bondTopic,
         priority: b.isRomantic ? 8 : (cold ? 6 : 5),
-        label: cold ? 'Something has been bothering them' : (b.isRomantic ? 'Something they want to say' : 'How they feel about you'),
+        label: cold ? 'Something to clear up' : (b.isRomantic ? 'Something they want to say' : 'A personal word'),
         why: cold
             ? 'They feel $label toward ${host.playerName}${last.isEmpty ? '' : ' after this: $last'}. They want to clear the air, or confront them.'
             : 'Their feelings for ${host.playerName} have grown to "$label"${last.isEmpty ? '' : ', most recently because: $last'}. They want to say something personal about it.',
@@ -135,23 +137,29 @@ Approach? pickApproach(StoryHost host, {Set<String> close = const {}, bool atCam
 Future<ChatLine?> deliverApproach(StoryHost host, Approach a, {StoryAi? ai}) async {
   final w = host.world;
   w.lastApproachTurn = host.turns;
-  w.approachTopics[a.topic] = host.turns;
   var text = a.fallback;
+  var label = a.label;
   var tokens = 0;
   var cost = 0.0;
   if (ai != null && host.isAi && host.settings.useAiNpcChat) {
     try {
       final r = await ai.opener(host, a.person, a.why);
-      if (r.value.trim().isNotEmpty) {
-        text = r.value.trim();
-        tokens = r.tokens;
-        cost = r.cost;
+      tokens = r.tokens;
+      cost = r.cost;
+      if (r.value.skip) {
+        // A bad moment: they wait and may try again in a couple of turns.
+        w.lastApproachTurn = host.turns - approachCooldown + 2;
+        host.save();
+        return null;
       }
+      if (r.value.text.trim().isNotEmpty) text = r.value.text.trim();
+      if (r.value.topic.isNotEmpty) label = r.value.topic;
     } catch (_) {
       // The written-in line still lets them start the conversation.
     }
   }
-  final line = ChatLine(fromPlayer: false, text: text, tokens: tokens, cost: cost, opener: a.label);
+  w.approachTopics[a.topic] = host.turns;
+  final line = ChatLine(fromPlayer: false, text: text, tokens: tokens, cost: cost, opener: label);
   w.chatWith(a.person.id).add(line);
   w.unreadChats.add(a.person.id);
   host.refresh();

@@ -6,6 +6,7 @@ import '../../models/tale.dart';
 import '../../services/export.dart';
 import '../../services/settings.dart';
 import '../screens/adventure/adventure_screen.dart';
+import '../screens/adventure/new_adventure_screen.dart';
 import '../screens/adventure/text_adventure_screen.dart';
 import '../screens/tales/tales_hub.dart';
 
@@ -24,6 +25,12 @@ class _ImportAdventureButtonState extends State<ImportAdventureButton> {
     try {
       final record = await importStory(context);
       if (!mounted || record == null) return;
+      if (record is Map<String, dynamic>) {
+        // A shared D&D adventure: choose a hero, then begin it fresh.
+        context.read<SettingsController>().update((s) => s.homeMode = 'dnd');
+        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => NewAdventureScreen(template: record)));
+        return;
+      }
       context.read<SettingsController>().update((s) => s.homeMode = record is Tale ? 'tales' : 'dnd');
       final Route<void> route;
       if (record is Tale) {

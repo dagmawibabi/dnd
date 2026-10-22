@@ -20,10 +20,12 @@ import '../models/world.dart';
 import '../models/chronicle.dart';
 import '../theme/ui.dart';
 import 'achievements.dart';
+import 'companion_store.dart';
 import 'game_store.dart';
 import 'studio.dart';
 import 'tale_store.dart';
 import 'image_service.dart';
+import 'narrator.dart';
 import 'settings.dart';
 import 'codex_art.dart';
 import 'usage.dart';
@@ -801,10 +803,39 @@ void showExportFor(BuildContext context, ExportDoc d, {StoryRecord? record, bool
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: RowGroup(children: [
+            if (record != null && ((record is Adventure && record.engine == StoryEngine.ai) || (record is Tale && record.engine == TaleEngine.ai)))
+              ListRow(
+                leading: busy == 'Share' ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.share_outlined, size: 20),
+                title: 'Share this adventure',
+                subtitle: 'A fresh start of this story (world, premise, tone and characters, no progress) that anyone can import and play',
+                onTap: () => run('Share', () async {
+                  final t = await storyTemplate(record, images.bytesOf);
+                  if (!ctx.mounted) return;
+                  final ok = await deliverFile(ctx, name: '${_slug(d.title)}.dnd-adventure.json', bytes: Uint8List.fromList(utf8.encode(jsonEncode(t))), mime: 'application/json', text: 'Play "${d.title}" in DnD: import this file from New adventure.');
+                  if (ok && ctx.mounted) showToast(ctx, 'Ready to share. They import it from New adventure.');
+                }),
+              ),
+            if (record != null)
+              ListRow(
+                leading: busy == 'Complete backup' ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.inventory_outlined, size: 20),
+                title: 'Complete backup',
+                subtitle: canSave ? 'Progress, every picture and the saved narration, to replay offline or move to another device' : 'Wait for the current turn to finish',
+                onTap: !canSave ? null : () => run('Complete backup', () async {
+                  final narrator = ctx.read<Narrator>();
+                  final archive = await portableStoryArchive(record, images.bytesOf, clipsFor: (e) async {
+                    final files = await narrator.cachedClips(e.text, speaker: e.kind == LogKind.narration ? null : e.speaker);
+                    if (files == null) return null;
+                    return [for (final f in files) (f.path.split('.').last, await f.readAsBytes())];
+                  });
+                  if (!ctx.mounted) return;
+                  final ok = await deliverFile(ctx, name: '${_slug(d.title)}.backup.json', bytes: Uint8List.fromList(utf8.encode(jsonEncode(archive))), mime: 'application/json');
+                  if (ok && ctx.mounted) showToast(ctx, 'Backed up with ${archive['narration'] ?? 0} narrated passages. Import it from Home.');
+                }),
+              ),
             if (record != null)
               ListRow(
                 leading: const Icon(Icons.save_alt, size: 20),
-                title: 'Playable adventure',
+                title: 'Playable save',
                 subtitle: canSave ? 'JSON save with progress, notes and available artwork' : 'Wait for the current turn to finish',
                 onTap: !canSave ? null : () => run('Playable adventure', () async {
                   final archive = await portableStoryArchive(record, images.bytesOf);
@@ -839,14 +870,23 @@ void showExportFor(BuildContext context, ExportDoc d, {StoryRecord? record, bool
 
 // ----------------------------------------------------------------- backup
 
-Future<StoryRecord?> importStory(BuildContext context) async {
+/// Imports a save, a backup or a shared adventure. Returns the story to open,
+/// or for a shared D&D adventure its template (the player picks a hero first).
+Future<Object?> importStory(BuildContext context) async {
   final games = context.read<GameStore>();
   final tales = context.read<TaleStore>();
   final images = context.read<ImageService>();
+  final settings = context.read<SettingsController>();
   try {
-    final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: ['json'], dialogTitle: 'Import playable adventure');
+    final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: ['json'], dialogTitle: 'Import an adventure');
     if (file == null) return null;
-    final archive = decodeStoryArchive(utf8.decode(await file.xFile.readAsBytes()));
+    final raw = utf8.decode(await file.xFile.readAsBytes());
+    final shared = jsonDecode(raw);
+    if (shared is Map && shared['app'] == 'DnD' && shared['format'] == 'template') {
+      if (!context.mounted) return null;
+      return await _importTemplate(Map<String, dynamic>.from(shared), images: images, tales: tales, settings: settings, context: context);
+    }
+    final archive = decodeStoryArchive(raw);
     final assets = archiveAssets(archive);
     final paths = <String, String>{};
     for (final e in assets.entries) {
@@ -866,6 +906,35 @@ Future<StoryRecord?> importStory(BuildContext context) async {
   }
 }
 
+/// A shared adventure: text adventures begin right away; D&D ones return the
+/// template so the player can choose a hero.
+Future<Object?> _importTemplate(Map<String, dynamic> t, {required ImageService images, required TaleStore tales, required SettingsController settings, required BuildContext context}) async {
+  final state = Map<String, dynamic>.from(t['state'] as Map? ?? const {});
+  final assets = archiveAssets(t);
+  final paths = <String, String>{};
+  for (final e in assets.entries) {
+    paths[e.key] = await images.savePhoto(e.value.$2, ext: e.value.$1);
+  }
+  final s = Map<String, dynamic>.from(remapArchive(state, paths) as Map);
+  if (t['kind'] == 'adventure') {
+    if (context.mounted) showToast(context, 'Choose your hero to begin "${s['title']}"');
+    return s;
+  }
+  final def = s['genreDef'];
+  if (def is Map && !settings.customGenres.any((g) => g['id'] == def['id'])) {
+    settings.update((x) => x.customGenres.add({...Map<String, dynamic>.from(def), 'icon': 0, 'color': 0}));
+  }
+  final tale = Tale.create(title: (s['title'] ?? 'A shared story').toString(), genre: (s['genre'] ?? 'fantasy').toString(), engine: TaleEngine.ai, protagonist: (s['protagonist'] ?? 'You').toString(), premise: (s['premise'] ?? '').toString())
+    ..terminal = settings.taleTerminal
+    ..narratorTone = (s['tone'] ?? '').toString()
+    ..worldNotes = templateWorldNotes(s);
+  final cover = s['cover'];
+  if (cover is String && cover.isNotEmpty) tale.addMedia(MediaItem(path: cover, kind: 'scene', caption: tale.title));
+  await tales.save(tale);
+  if (context.mounted) showToast(context, 'A fresh copy of "${tale.title}" is ready');
+  return tale;
+}
+
 
 Future<void> exportBackup(BuildContext context) async {
   final store = context.read<GameStore>();
@@ -882,6 +951,7 @@ Future<void> exportBackup(BuildContext context) async {
     'profile': await profileBackup(settings, images),
     if (codex != null) 'codexArt': await codexArtBackup(codex, images),
     if (studio != null && !studio.isEmpty) 'studio': studio.toJson(),
+    if (CompanionStore.instance.companions.isNotEmpty) 'companions': await CompanionStore.instance.backup(images.bytesOf),
   };
   final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
   final stamp = DateTime.now().toIso8601String().substring(0, 10);
@@ -903,8 +973,13 @@ Future<void> importBackup(BuildContext context) async {
     if (j['tales'] is List && context.mounted) await context.read<TaleStore>().restore(j['tales'] as List);
     if (j['achievements'] is Map) ach.restore(Map<String, dynamic>.from(j['achievements']));
     if (j['studio'] is Map && context.mounted) context.read<StudioStore?>()?.restore(Map<String, dynamic>.from(j['studio']));
+    var friends = 0;
+    if (j['companions'] is Map && context.mounted) {
+      final images = context.read<ImageService>();
+      friends = await CompanionStore.instance.restore(Map<String, dynamic>.from(j['companions']), (bytes, ext) => images.savePhoto(bytes, ext: ext));
+    }
     if (context.mounted) await restoreProfileAndArt(context, j);
-    if (context.mounted) showToast(context, 'Restored $c heroes, $a adventures, $cp campaigns');
+    if (context.mounted) showToast(context, 'Restored $c heroes, $a adventures, $cp campaigns${friends > 0 ? ', $friends companions' : ''}');
   } catch (e) {
     if (context.mounted) showToast(context, 'Import failed: $e', icon: Icons.error_outline);
   }

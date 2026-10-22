@@ -11,13 +11,17 @@ import '../../../art/render_png.dart';
 import '../../widgets/media_view.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/details_sheet.dart';
+import '../../widgets/image_attach.dart';
 import '../../widgets/image_viewer.dart';
 import '../../widgets/portrait.dart';
 import '../../widgets/typewriter.dart';
 
 /// One item in the story feed.
 class LogEntryView extends StatelessWidget {
-  const LogEntryView({super.key, required this.entry, required this.adventure, this.animate = false, this.speed = 1, this.onAnimated, this.latestScene = false, this.onTalk, this.onJournal, this.onPassage});
+  const LogEntryView({super.key, required this.entry, required this.adventure, this.animate = false, this.speed = 1, this.onAnimated, this.latestScene = false, this.onTalk, this.onJournal, this.onPassage, this.onQuest});
+
+  /// Opens a quest's or goal's details by title.
+  final void Function(String title)? onQuest;
 
   /// Long-press actions for a passage (listen, illustrate, regenerate…).
   final void Function(LogEntry)? onPassage;
@@ -44,8 +48,9 @@ class LogEntryView extends StatelessWidget {
       final passage = onPassage;
       child = GestureDetector(onLongPress: passage != null ? () => passage(entry) : () => context.read<Narrator>().speakNow(entry.text, speaker: entry.speaker), child: child);
     }
+    // Tapping someone's reply opens your private chat; their portrait opens the picture.
     final person = adventure.personNamed(entry.speaker);
-    if (person != null && onTalk != null && (entry.kind == LogKind.dialogue || entry.kind == LogKind.companion)) {
+    if (person != null && onTalk != null && entry.kind == LogKind.companion) {
       return GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => onTalk!(person), child: child);
     }
     if (!hasDetails(entry) || questOf(entry) != null) return child;
@@ -60,23 +65,11 @@ class LogEntryView extends StatelessWidget {
           child: TypewriterText(text: _prose(entry.text), animate: animate, speed: speed, onDone: onAnimated, style: T.reading()),
         );
       case LogKind.dialogue:
-        final npc = adventure.personNamed(entry.speaker);
+        // Narration that is mostly one character talking is still narration:
+        // it reads as prose (the speaker only picks the voice).
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (npc != null)
-              NpcPortrait(npc: npc, size: 34)
-            else
-              Container(width: 34, height: 34, decoration: const BoxDecoration(color: AppColors.surface2, shape: BoxShape.circle), child: const Icon(Icons.person_outline, size: 16)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(entry.speaker ?? '', style: T.h3()),
-                const SizedBox(height: 4),
-                TypewriterText(text: _prose(entry.text), animate: animate, speed: speed, onDone: onAnimated, style: T.reading(), onTap: npc == null || onTalk == null ? null : () => onTalk!(npc)),
-              ]),
-            ),
-          ]),
+          child: TypewriterText(text: _prose(entry.text), animate: animate, speed: speed, onDone: onAnimated, style: T.reading()),
         );
       case LogKind.companion:
         final c = adventure.companionNamed(entry.speaker);
@@ -84,8 +77,8 @@ class LogEntryView extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (c != null) CharacterPortrait(character: c, size: 28)
-            else if (npc != null) NpcPortrait(npc: npc, size: 28)
+            if (c != null) CharacterPortrait(character: c, size: 28, viewable: true)
+            else if (npc != null) NpcPortrait(npc: npc, size: 28, viewable: true)
             else const CircleAvatar(radius: 14, child: Icon(Icons.person_outline, size: 16)),
             const SizedBox(width: 10),
             Flexible(
@@ -106,9 +99,12 @@ class LogEntryView extends StatelessWidget {
           ]),
         );
       case LogKind.player:
+        final pics = [for (final p in (entry.meta['images'] as List? ?? const [])) p.toString()];
         return Padding(
           padding: const EdgeInsets.only(top: 14, bottom: 6, left: 56),
-          child: Align(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            if (pics.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 6), child: SentImages(paths: pics, alignEnd: true)),
+            Align(
             alignment: Alignment.centerRight,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -119,6 +115,7 @@ class LogEntryView extends StatelessWidget {
               child: Text(entry.text, style: T.chat(color: AppColors.bg)),
             ),
           ),
+          ]),
         );
       case LogKind.roll:
         final ok = entry.meta['ok'] == true;
@@ -160,7 +157,7 @@ class LogEntryView extends StatelessWidget {
           ]),
         );
       case LogKind.levelup when questOf(entry) != null:
-        return QuestCard(entry: entry, onJournal: onJournal);
+        return QuestCard(entry: entry, onJournal: onJournal, onQuest: onQuest);
       case LogKind.levelup:
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -439,9 +436,10 @@ Map<String, dynamic>? questOf(LogEntry e) {
 
 /// A quest or goal starting, advancing, succeeding or failing.
 class QuestCard extends StatelessWidget {
-  const QuestCard({super.key, required this.entry, this.onJournal});
+  const QuestCard({super.key, required this.entry, this.onJournal, this.onQuest});
   final LogEntry entry;
   final VoidCallback? onJournal;
+  final void Function(String title)? onQuest;
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +454,7 @@ class QuestCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(18),
-          onTap: () => showQuestSheet(context, entry, onJournal: onJournal),
+          onTap: () => onQuest != null ? onQuest!((questOf(entry)!['title'] ?? '').toString()) : showQuestSheet(context, entry, onJournal: onJournal),
           child: Ink(
             padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
             decoration: BoxDecoration(

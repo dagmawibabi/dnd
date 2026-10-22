@@ -51,7 +51,7 @@ class ChipPicker<V> extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label, style: T.body()),
           const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [
+          CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final o in options)
               ChoiceChip(
                 avatar: iconOf?.call(o) == null ? null : Icon(iconOf!(o), size: 16),
@@ -59,7 +59,7 @@ class ChipPicker<V> extends StatelessWidget {
                 selected: o == value,
                 onSelected: (_) => onChanged(o),
               ),
-          ]),
+          ])),
         ]),
       );
 }

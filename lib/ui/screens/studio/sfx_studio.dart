@@ -320,10 +320,10 @@ class _SfxStudioScreenState extends State<SfxStudioScreen> with SingleTickerProv
         const SectionLabel('Generate', padding: EdgeInsets.fromLTRB(20, 20, 20, 0)),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Wrap(spacing: 6, runSpacing: 6, children: [
+          child: CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
             for (final k in SfxSpec.kinds) ActionChip(label: Text(k[0].toUpperCase() + k.substring(1)), onPressed: () => _set(SfxSpec.random(k, _rng), play: true)),
             ActionChip(avatar: const Icon(Icons.auto_fix_high, size: 16), label: const Text('Mutate'), onPressed: () => _set(_mutate(s), play: true)),
-          ]),
+          ])),
         ),
         const SectionLabel('Shape', padding: EdgeInsets.fromLTRB(20, 20, 20, 0)),
         ChipPicker<String>(

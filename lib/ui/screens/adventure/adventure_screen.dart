@@ -17,6 +17,10 @@ import '../../../services/usage.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/dice.dart';
 import '../../widgets/error_card.dart';
+import '../../widgets/ai_trace_sheet.dart';
+import '../../widgets/feed_follower.dart';
+import '../../widgets/fullscreen.dart';
+import '../../widgets/image_attach.dart';
 import '../../widgets/portrait.dart';
 import '../../../data/srd.dart';
 import '../character/character_sheet.dart';
@@ -30,6 +34,7 @@ import 'shop_sheet.dart';
 import 'log_view.dart';
 import 'map_screen.dart';
 import 'sheets.dart';
+import '../story/quest_sheet.dart';
 import '../story/story_tools.dart';
 import '../story/story_extras.dart';
 import '../../widgets/voice_input_button.dart';
@@ -98,7 +103,9 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
   // Looked up eagerly: dispose() can't read providers once the tree is unmounting.
   late final AudioService _audio;
   final _scroll = ScrollController();
+  late final _follow = FeedFollower(_scroll);
   final _input = TextEditingController();
+  final _pics = PendingImages();
   int _lastLogLen = 0;
   bool _choicesCollapsed = false;
   late final DateTime _lastPlayed = widget.adventure.updatedAt;
@@ -131,6 +138,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
     _ctl.dispose();
     _scroll.dispose();
     _input.dispose();
+    _pics.dispose();
     _audio.stopMusic();
     _audio.stopAmbience();
     super.dispose();
@@ -139,12 +147,19 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
   void _onChange() {
     if (!mounted) return;
     handleControllerPrompts();
-    if (_ctl.adventure.log.length != _lastLogLen || _ctl.streaming != null) {
-      _lastLogLen = _ctl.adventure.log.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // The feed is reversed, so offset 0 is the newest content.
-        if (_scroll.hasClients && _scroll.offset > 0) _scroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-      });
+    final log = _ctl.adventure.log;
+    if (log.length != _lastLogLen || _ctl.streaming != null) {
+      // The player acted: follow the reply again, from its first line.
+      if (log.length > _lastLogLen && log.isNotEmpty && log.last.kind == LogKind.player) _follow.resume();
+      _lastLogLen = log.length;
+      if (_ctl.inCombat) {
+        // Combat is read as it happens: keep the newest blow in view.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients && _scroll.offset > 0) _scroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        });
+      } else if (_follow.follow) {
+        _follow.reveal();
+      }
     }
     setState(() {});
   }
@@ -152,7 +167,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
   void _submit() {
     final t = _input.text;
     _input.clear();
-    unawaited(_ctl.freeText(t));
+    unawaited(_ctl.freeText(t, images: _pics.take()));
   }
 
   void _menu() {
@@ -179,8 +194,9 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
     final wide = MediaQuery.sizeOf(context).width >= 1100;
     final m = a.map;
     final scene = a.scene.title.isEmpty || a.scene.title == 'The Beginning' ? a.setting : a.scene.title;
-    return Scaffold(
-      appBar: AppBar(
+    final full = context.select<SettingsController, bool>((s) => s.fullscreen);
+    return Immersive(child: Scaffold(
+      appBar: full ? null : AppBar(
         titleSpacing: 0,
         title: GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -201,6 +217,12 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
       body: Row(children: [
         Expanded(
           child: Column(children: [
+            if (full)
+              FullscreenControls(title: a.title, onTitle: () => showStoryOverview(context, _ctl), actions: [
+                IconButton(tooltip: 'Map', visualDensity: VisualDensity.compact, icon: const Icon(Icons.map_outlined, size: 20), onPressed: () => openMapScreen(context, _ctl)),
+                IconButton(tooltip: 'Journal', visualDensity: VisualDensity.compact, icon: const Icon(Icons.book_outlined, size: 20), onPressed: () => showJournalSheet(context, _ctl)),
+                IconButton(tooltip: 'More', visualDensity: VisualDensity.compact, icon: const Icon(Icons.more_horiz, size: 20), onPressed: _menu),
+              ]),
             _statusBar(),
             RecapBanner(host: _ctl, lastPlayed: _lastPlayed),
             Expanded(child: _feed()),
@@ -215,7 +237,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             child: _sidePanel(),
           ),
       ]),
-    );
+    ));
   }
 
   Widget _statusBar() {
@@ -225,7 +247,7 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.border))),
       child: ContentWidth(
         child: Row(children: [
-          InkWell(onTap: () => showPartySheet(context, _ctl), customBorder: const CircleBorder(), child: CharacterPortrait(character: hero, size: 32)),
+          GestureDetector(onTap: () => showPartySheet(context, _ctl), child: CharacterPortrait(character: hero, size: 32)),
           const SizedBox(width: 12),
           Expanded(
             child: GestureDetector(
@@ -244,8 +266,28 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             ]),
             ),
           ),
-          for (final c in _ctl.adventure.companions)
-            Padding(padding: const EdgeInsets.only(left: 8), child: Opacity(opacity: c.hp > 0 ? 1 : 0.4, child: InkWell(onTap: () => showNpcChat(context, _ctl, _ctl.adventure.personNamed(c.name)!), child: CharacterPortrait(character: c, size: 26)))),
+          if (_ctl.adventure.companions.isNotEmpty)
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.38),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  for (final c in _ctl.adventure.companions)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Opacity(
+                        opacity: c.hp > 0 ? 1 : 0.4,
+                        // Tap opens their profile; long-press goes straight to your chat.
+                        child: GestureDetector(
+                          onTap: () => showPersonSheet(context, _ctl, _ctl.adventure.personNamed(c.name)!),
+                          onLongPress: () => showNpcChat(context, _ctl, _ctl.adventure.personNamed(c.name)!),
+                          child: CharacterPortrait(character: c, size: 26),
+                        ),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
         ]),
       ),
     );
@@ -257,17 +299,21 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
     final images = context.watch<ImageService>();
     final imageErrors = images.errors.entries.where((e) => e.key.contains(a.id)).toList();
     final lastSceneIdx = a.log.lastIndexWhere((e) => e.meta['scene'] != null);
+    final streamingNow = (_ctl.streaming ?? '').isNotEmpty;
+    final anchorIdx = streamingNow ? -1 : FeedFollower.anchorIndex(a.log);
     return ContentWidth(
-      child: ListView.builder(
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _follow.onScroll,
+        child: ListView.builder(
         controller: _scroll,
         reverse: true,
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
         itemCount: a.log.length + 1,
         itemBuilder: (ctx, i) {
           if (i == 0) {
-            if ((_ctl.streaming ?? '').isNotEmpty) return Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: T.reading()));
-            if (_ctl.busy || _ctl.streaming != null) return ThinkingIndicator(first: a.log.isEmpty);
-            if (_ctl.error != null) return ErrorCard(error: _ctl.error!, label: 'Story');
+            if (streamingNow) return _follow.anchor(GestureDetector(onTap: () => showAiTrace(context, _ctl), child: Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(_ctl.streaming!, style: T.reading()))));
+            if (_ctl.busy || _ctl.streaming != null) return ThinkingIndicator(first: a.log.isEmpty, onTap: () => showAiTrace(context, _ctl));
+            if (_ctl.error != null) return ErrorCard(error: _ctl.error!, label: 'Story', onRetry: _ctl.isAi ? _ctl.retryAi : null);
             if (a.finished) {
               return Padding(
                 padding: const EdgeInsets.only(top: 16),
@@ -302,11 +348,13 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
           final e = a.log[idx];
           final id = '${e.at.microsecondsSinceEpoch}';
           final anim = settings.typewriter && !_ctl.animated.contains(id) && (e.kind == LogKind.narration || e.kind == LogKind.dialogue) && idx >= a.log.length - 6;
-          return FadeIn(
+          final item = FadeIn(
             key: ValueKey(id),
-            child: LogEntryView(entry: e, adventure: a, onTalk: (npc) => showNpcChat(context, _ctl, npc), onJournal: () => showJournalSheet(context, _ctl), onPassage: (e) => showPassageSheet(context, _ctl, e), animate: anim, speed: settings.typeSpeed * 2, latestScene: idx == lastSceneIdx, onAnimated: () => _ctl.animated.add(id)),
+            child: LogEntryView(entry: e, adventure: a, onTalk: (npc) => showNpcChat(context, _ctl, npc), onJournal: () => showJournalSheet(context, _ctl), onPassage: (e) => showPassageSheet(context, _ctl, e), onQuest: (t) => showQuestByTitle(context, _ctl, t), animate: anim, speed: settings.typeSpeed * 2, latestScene: idx == lastSceneIdx, onAnimated: () => _ctl.animated.add(id)),
           );
+          return idx == anchorIdx ? _follow.anchor(item) : item;
         },
+      ),
       ),
     );
   }
@@ -362,7 +410,8 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             ),
           ),
         const SizedBox(height: 4),
-        Row(children: [
+        if (_ctl.isAi) PendingImagesStrip(pending: _pics),
+        ComposerBuilder(controller: _input, builder: (context, typing) => Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Semantics(
             label: 'Story tools',
             child: CircleIconButton(icon: Icons.lightbulb_outline, size: 44, tooltip: 'Story tools', onPressed: () => showStoryActions(context, _ctl)),
@@ -373,9 +422,12 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
               controller: _input,
               enabled: !disabled,
               style: T.body(),
+              minLines: 1,
+              maxLines: typing ? 6 : 1,
               textInputAction: TextInputAction.send,
               decoration: InputDecoration(
                 hintText: _ctl.isAi ? 'Or describe what you do…' : 'Type a number or command (help)',
+                suffixIcon: _ctl.isAi && !typing ? AttachImageButton(pending: _pics, flat: true, enabled: !disabled) : null,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: const BorderSide(color: AppColors.border)),
                 enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: const BorderSide(color: AppColors.border)),
@@ -385,10 +437,12 @@ class _AdventureScreenState extends State<AdventureScreen> with AdventureDialogs
             ),
           ),
           const SizedBox(width: 8),
-          VoiceInputButton(controller: _input, onSubmit: _submit, enabled: !disabled),
-          if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
+          if (!typing) ...[
+            VoiceInputButton(controller: _input, onSubmit: _submit, enabled: !disabled),
+            if (context.watch<SettingsController>().voiceInput) const SizedBox(width: 8),
+          ],
           CircleIconButton(icon: Icons.arrow_upward, size: 44, tooltip: 'Send', onPressed: disabled ? null : _submit),
-        ]),
+        ])),
       ]),
     );
   }

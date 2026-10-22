@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../services/companion_life.dart';
+import '../../services/companion_store.dart';
+import 'companions/companion_chat.dart';
+import 'companions/companion_editor.dart';
+import 'companions/companion_profile.dart';
+import 'companions/companions_screen.dart';
 import '../../art/class_icon.dart';
 import '../../art/scene_painter.dart';
 import '../../data/presets.dart';
@@ -26,6 +32,7 @@ import '../../data/tales/tales.dart';
 import 'tales/tales_hub.dart';
 import 'dice_tray_screen.dart';
 import 'settings/settings_screen.dart';
+import 'story/cover_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -194,6 +201,8 @@ class _HomeTab extends StatelessWidget {
                 children: [
                   const SizedBox(height: 4),
                   const _ModeSwitch(),
+                  const SizedBox(height: 12),
+                  const _CompanionsRow(),
                   const SizedBox(height: 16),
                   if (settings.homeMode == 'tales')
                     const TalesHub()
@@ -348,6 +357,78 @@ class _HomeTab extends StatelessWidget {
 }
 
 /// Switches the home screen between D&D and text adventures.
+/// Companions at a glance: tap one to chat, or make a new one.
+class _CompanionsRow extends StatelessWidget {
+  const _CompanionsRow();
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(listenable: CompanionStore.instance, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
+    final store = CompanionStore.instance;
+    final list = [...store.companions]..sort((a, b) => CompanionLife.lastContact(b).compareTo(CompanionLife.lastContact(a)));
+    void open(Widget w) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => w));
+    if (list.isEmpty) {
+      return AppCard(
+        padding: const EdgeInsets.all(14),
+        onTap: () => open(const CompanionEditor()),
+        child: Row(children: [
+          const Icon(Icons.diversity_1_outlined, color: AppColors.accent),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Make a companion', style: T.h3()),
+              Text('A friend to chat with who joins your adventures and remembers them', style: T.small()),
+            ]),
+          ),
+          const Icon(Icons.chevron_right, color: AppColors.textFaint),
+        ]),
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SectionLabel(
+        'Companions',
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+        trailing: GestureDetector(onTap: () => open(const CompanionsScreen()), child: Text(store.unread > 0 ? '${store.unread} new · See all' : 'See all', style: T.caption(color: store.unread > 0 ? AppColors.accent : AppColors.textMuted))),
+      ),
+      SizedBox(
+        height: 86,
+        child: ListView(scrollDirection: Axis.horizontal, children: [
+          for (final c in list)
+            Padding(
+              padding: const EdgeInsets.only(right: 14),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => open(CompanionChatScreen(companionId: c.id)),
+                onLongPress: () => open(CompanionProfileScreen(companionId: c.id)),
+                child: SizedBox(
+                  width: 60,
+                  child: Column(children: [
+                    CompanionAvatar(companion: c, size: 56, badge: c.unread),
+                    const SizedBox(height: 6),
+                    Text(c.name.split(' ').first, style: T.caption(color: c.unread ? AppColors.text : AppColors.textMuted), overflow: TextOverflow.ellipsis),
+                  ]),
+                ),
+              ),
+            ),
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => open(const CompanionEditor()),
+            child: SizedBox(
+              width: 60,
+              child: Column(children: [
+                Container(width: 56, height: 56, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: AppColors.border)), child: const Icon(Icons.add, color: AppColors.textMuted)),
+                const SizedBox(height: 6),
+                Text('New', style: T.caption(color: AppColors.textMuted)),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
 class _LibraryHeader extends StatelessWidget {
   const _LibraryHeader({required this.tales, required this.greeting});
   final bool tales;
@@ -473,7 +554,7 @@ class _ContinueCard extends StatelessWidget {
     final hero = store.characters.where((c) => c.name == summary.heroName).firstOrNull;
     final portrait = summary.heroPortrait == null ? null : PortraitSpec.fromJson(summary.heroPortrait!);
     return AppCard(
-      onTap: () => openAdventure(context, summary.id),
+      onTap: () => openAdventureCover(context, summary.id),
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -500,11 +581,18 @@ class _ContinueCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(color: AppColors.text, shape: BoxShape.circle),
-                child: const Icon(Icons.play_arrow_rounded, color: AppColors.bg),
+              Semantics(
+                button: true,
+                label: 'Continue playing',
+                child: GestureDetector(
+                  onTap: () => openAdventure(context, summary.id),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: const BoxDecoration(color: AppColors.text, shape: BoxShape.circle),
+                    child: const Icon(Icons.play_arrow_rounded, color: AppColors.bg),
+                  ),
+                ),
               ),
             ],
           ),
@@ -550,7 +638,7 @@ class _AdventureRow extends StatelessWidget {
               : (summary.engine == StoryEngine.ai ? Icons.auto_awesome_outlined : (summary.engine == StoryEngine.module ? Icons.menu_book_outlined : Icons.all_inclusive)),
           size: 20,
         ),
-        onTap: () => openAdventure(context, summary.id),
+        onTap: () => openAdventureCover(context, summary.id),
       ),
     );
   }

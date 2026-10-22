@@ -52,7 +52,39 @@ const taleGenres = <TaleGenre>[
       style: 'Absurd, warm comedy. Escalating misunderstandings, witty narration, everyone is a little ridiculous, nothing too dark.'),
 ];
 
-TaleGenre genreById(String id) => taleGenres.firstWhere((g) => g.id == id, orElse: () => taleGenres.first);
+/// Genres the player made (loaded from Settings).
+List<TaleGenre> customTaleGenres = [];
+
+/// Built-in genres, then the player's own.
+List<TaleGenre> get allTaleGenres => [...taleGenres, ...customTaleGenres];
+
+TaleGenre genreById(String id) => allTaleGenres.firstWhere((g) => g.id == id, orElse: () => taleGenres.first);
+
+const customGenreIcons = [Icons.auto_awesome_outlined, Icons.castle_outlined, Icons.rocket_outlined, Icons.forest_outlined, Icons.water_outlined, Icons.local_police_outlined, Icons.psychology_outlined, Icons.favorite_border, Icons.sports_esports_outlined, Icons.school_outlined, Icons.pets_outlined, Icons.bolt_outlined];
+const customGenreColors = [Color(0xFF8B7CF6), Color(0xFF60A5FA), Color(0xFF2DD4BF), Color(0xFF4ADE80), Color(0xFFFBBF24), Color(0xFFFB923C), Color(0xFFF87171), Color(0xFFF472B6), Color(0xFFE879F9), Color(0xFFA1A1AA)];
+
+/// Places the scene painter can draw, for a custom genre's backdrop.
+const genreScenes = ['castle', 'forest', 'town', 'tavern', 'cave', 'ruins', 'coast', 'desert', 'tundra', 'swamp', 'crypt', 'tower', 'mountain', 'plains'];
+
+/// A player-made genre from its saved form.
+TaleGenre genreFromJson(Map<String, dynamic> j) {
+  final scene = (j['scene'] ?? 'castle').toString();
+  return TaleGenre(
+    (j['id'] ?? 'custom').toString(),
+    (j['name'] ?? 'My genre').toString(),
+    (j['tagline'] ?? '').toString(),
+    customGenreIcons[((j['icon'] ?? 0) as num).toInt().clamp(0, customGenreIcons.length - 1)],
+    customGenreColors[((j['color'] ?? 0) as num).toInt().clamp(0, customGenreColors.length - 1)],
+    scene: scene,
+    time: (j['time'] ?? 'dusk').toString(),
+    music: (j['music'] ?? 'mystery').toString(),
+    ambience: (j['ambience'] ?? 'wind').toString(),
+    style: (j['style'] ?? '').toString(),
+    healthLabel: (j['health'] ?? 'Health').toString().trim().isEmpty ? 'Health' : j['health'].toString(),
+  );
+}
+
+bool isCustomGenre(String id) => id.startsWith('custom_');
 
 /// Illustration style for a genre's AI images and videos.
 String taleArtStyle(TaleGenre g) {

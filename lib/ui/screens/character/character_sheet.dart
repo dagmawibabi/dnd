@@ -158,34 +158,30 @@ class _CharacterSheetBodyState extends State<CharacterSheetBody> with SingleTick
     final settings = context.watch<SettingsController>();
     final images = context.watch<ImageService>();
     final key = 'portrait_${c.id}';
-    return Row(
+    final painted = c.portrait.aiImagePath != null;
+    Future<void> paint() async {
+      final path = await images.generate(key, 'Portrait of ${c.name}, a ${c.raceLabel} ${c.classSummary} (${c.pronouns}). ${c.appearance.isNotEmpty ? c.appearance : c.personality}', references: [if (painted) (c.name, c.portrait.aiImagePath!)]);
+      if (!mounted) return;
+      if (path != null) {
+        c.portrait.useAiImage(path);
+        _changed();
+      } else if (mounted && images.errors[key] != null) {
+        showToast(context, images.errors[key]!, icon: Icons.error_outline);
+      }
+    }
+
+    final row = Row(
       children: [
         Stack(
           clipBehavior: Clip.none,
           children: [
             CharacterPortrait(character: c, size: 76, viewable: true),
-            if (settings.useAiImages)
+            // Until there is an AI portrait the small button sits on the picture.
+            if (settings.useAiImages && !painted)
               Positioned(
-                right: -6,
-                bottom: -6,
-                child: CircleIconButton(
-                  size: 30,
-                  icon: Icons.auto_awesome_outlined,
-                  tooltip: 'Generate AI portrait',
-                  busy: images.isBusy(key),
-                  onPressed: images.isBusy(key)
-                      ? null
-                      : () async {
-                          final path = await images.generate(key, 'Portrait of ${c.name}, a ${c.raceLabel} ${c.classSummary} (${c.pronouns}). ${c.personality}');
-                          if (!mounted) return;
-                          if (path != null) {
-                            c.portrait.aiImagePath = path;
-                            _changed();
-                          } else if (mounted && images.errors[key] != null) {
-                            showToast(context, images.errors[key]!, icon: Icons.error_outline);
-                          }
-                        },
-                ),
+                right: -4,
+                bottom: -4,
+                child: CircleIconButton(size: 26, icon: Icons.auto_awesome_outlined, tooltip: 'Paint AI portrait', busy: images.isBusy(key), onPressed: images.isBusy(key) ? null : paint),
               ),
           ],
         ),
@@ -227,6 +223,21 @@ class _CharacterSheetBodyState extends State<CharacterSheetBody> with SingleTick
         ),
       ],
     );
+    if (c.portrait.portraitHistory.isEmpty && !(settings.useAiImages && painted)) return row;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      row,
+      const SizedBox(height: 10),
+      Row(children: [
+        Expanded(child: Text('Portraits · tap to use, hold to view', style: T.caption())),
+        if (settings.useAiImages)
+          TextButton.icon(
+            onPressed: images.isBusy(key) ? null : paint,
+            icon: images.isBusy(key) ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.auto_awesome_outlined, size: 16),
+            label: Text(images.isBusy(key) ? 'Painting…' : 'Paint a new one', style: T.small(color: AppColors.text)),
+          ),
+      ]),
+      PortraitHistoryStrip(spec: c.portrait, size: 56, onChanged: _changed),
+    ]);
   }
 
   Widget _vitals() {

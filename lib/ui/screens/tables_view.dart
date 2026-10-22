@@ -113,9 +113,9 @@ class _OracleViewState extends State<OracleView> {
       const SizedBox(height: 14),
       TextField(controller: _q, style: T.body(), decoration: const InputDecoration(hintText: 'Does the bridge hold?')),
       const SizedBox(height: 12),
-      Wrap(spacing: 6, runSpacing: 6, children: [
+      CompactChips(child: Wrap(spacing: 6, runSpacing: 6, children: [
         for (final l in Likelihood.values) ChoiceChip(label: Text(l.label), selected: _l == l, onSelected: (_) => setState(() => _l = l)),
-      ]),
+      ])),
       const SizedBox(height: 12),
       Row(children: [
         Text('CHAOS $_chaos', style: T.overline()),

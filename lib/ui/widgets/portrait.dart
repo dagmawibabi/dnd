@@ -166,3 +166,60 @@ class MonsterToken extends StatelessWidget {
     );
   }
 }
+
+/// Every AI portrait a character has had: tap one to use it again, or go back
+/// to the drawn portrait. [extra] adds older pictures found elsewhere (gallery).
+class PortraitHistoryStrip extends StatelessWidget {
+  const PortraitHistoryStrip({super.key, required this.spec, required this.onChanged, this.extra = const [], this.size = 64});
+  final PortraitSpec spec;
+  final List<String> extra;
+  final VoidCallback onChanged;
+  final double size;
+
+  List<String> get paths => [...spec.portraitHistory, for (final p in extra) if (!spec.portraitHistory.contains(p)) p];
+
+  @override
+  Widget build(BuildContext context) {
+    final images = context.read<ImageService>();
+    final all = paths;
+    if (all.isEmpty) return const SizedBox.shrink();
+    Widget tile({required bool selected, required Widget child, required VoidCallback onTap, VoidCallback? onLongPress}) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: GestureDetector(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: size,
+              height: size,
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: selected ? AppColors.accent : AppColors.border, width: selected ? 2 : 1)),
+              child: ClipRRect(borderRadius: BorderRadius.circular(11), child: child),
+            ),
+          ),
+        );
+    return SizedBox(
+      height: size + 4,
+      child: ListView(scrollDirection: Axis.horizontal, children: [
+        for (final p in all)
+          tile(
+            selected: spec.aiImagePath == p,
+            onTap: () {
+              spec.useAiImage(p);
+              onChanged();
+            },
+            onLongPress: () => openImageViewer(context, title: 'Portrait', builder: (_) => GeneratedImage(path: p, fallback: const SizedBox(), service: images, fit: BoxFit.contain), actions: mediaActions(context, p, name: 'Portrait')),
+            child: GeneratedImage(path: p, fallback: Container(color: AppColors.surface2, child: const Icon(Icons.image_not_supported_outlined, size: 18)), service: images, cacheWidth: (size * 2).round()),
+          ),
+        tile(
+          selected: spec.aiImagePath == null,
+          onTap: () {
+            spec.aiImagePath = null;
+            onChanged();
+          },
+          child: Container(color: AppColors.surface2, alignment: Alignment.center, child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.draw_outlined, size: 18, color: AppColors.textMuted), Text('Drawn', style: T.caption())])),
+        ),
+      ]),
+    );
+  }
+}

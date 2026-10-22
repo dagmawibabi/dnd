@@ -2,6 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../models/companion.dart';
+import '../../../services/companion_store.dart';
+import '../companions/companions_screen.dart';
 
 import '../../../data/names.dart';
 import '../../../art/scene_painter.dart';
@@ -12,13 +15,17 @@ import '../../../game/dice.dart';
 import '../../../models/adventure.dart';
 import '../../../models/character.dart';
 import '../../../services/ai/dungeon_master.dart';
+import '../../../models/world.dart' show MediaItem;
 import '../../../services/game_store.dart';
+import '../../../services/story_archive.dart' show templateWorldNotes;
 import '../../../services/settings.dart';
 import '../../../theme/ui.dart';
 import '../../widgets/ai_gate.dart';
 import '../../widgets/bright_art.dart';
 import '../../widgets/portrait.dart';
+import '../../widgets/genre_editor.dart';
 import '../../widgets/import_adventure_button.dart';
+import '../../widgets/narrator_tone.dart';
 import '../character/character_creator.dart';
 import 'adventure_screen.dart';
 import 'text_adventure_screen.dart';
@@ -38,9 +45,15 @@ const _tones = ['Heroic', 'Dark', 'Whimsical', 'Mysterious', 'Epic', 'Comedic'];
 const _difficulties = ['Story', 'Normal', 'Hard', 'Deadly'];
 
 class NewAdventureScreen extends StatefulWidget {
-  const NewAdventureScreen({super.key, this.heroId, this.moduleId});
+  const NewAdventureScreen({super.key, this.heroId, this.moduleId, this.template, this.companionIds = const []});
   final String? heroId;
   final String? moduleId;
+
+  /// Companions to bring along (from a chat or profile).
+  final List<String> companionIds;
+
+  /// A shared adventure to begin fresh (title, premise, world, tone, cast).
+  final Map<String, dynamic>? template;
 
   @override
   State<NewAdventureScreen> createState() => _NewAdventureScreenState();
@@ -52,11 +65,15 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
   bool _textMode = false;
   String _setting = 'High fantasy';
   String _tone = 'Heroic';
+  String _narrator = '';
   String _difficulty = 'Normal';
   late bool _hardcore = context.read<SettingsController>().defaultHardcore;
   late bool _showDcs = context.read<SettingsController>().defaultShowDcs;
   int _chaos = 5;
   final List<Character> _companions = [];
+
+  /// Party member id -> the companion they are.
+  final Map<String, String> _fromCompanion = {};
   final _titleCtrl = TextEditingController();
   final _premiseCtrl = TextEditingController();
   bool _generating = false;
@@ -74,6 +91,31 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
       _moduleId = widget.moduleId!;
       _engine = StoryEngine.module;
     }
+    final t = widget.template;
+    if (t != null) {
+      _engine = StoryEngine.ai;
+      _titleCtrl.text = (t['title'] ?? '').toString();
+      _premiseCtrl.text = (t['premise'] ?? '').toString();
+      _setting = (t['setting'] ?? _setting).toString();
+      _tone = _tones.contains(t['mood']) ? t['mood'] as String : _tone;
+      _narrator = (t['tone'] ?? '').toString();
+      if (_difficulties.contains(t['difficulty'])) _difficulty = t['difficulty'] as String;
+      _hardcore = t['hardcore'] == true;
+    }
+    for (final id in widget.companionIds) {
+      final c = CompanionStore.instance.byId(id);
+      if (c != null) _bringCompanion(c);
+    }
+  }
+
+  /// Adds a companion to the party with their sheet, at the hero's level.
+  void _bringCompanion(Companion c) {
+    if (_fromCompanion.containsValue(c.id) || _companions.length >= 3) return;
+    final hero = _hero;
+    final sheet = companionSheet(c, level: hero?.level ?? 1);
+    if (hero != null && sheet.xp < hero.xp) sheet.xp = hero.xp;
+    _companions.add(sheet);
+    _fromCompanion[sheet.id] = c.id;
   }
 
   @override
@@ -92,7 +134,8 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
     try {
       final settings = context.read<SettingsController>();
       if (_engine == StoryEngine.ai && settings.useAiPremises) {
-        final r = await AiDungeonMaster(settings).premise(setting: _setting, tone: _tone, hero: hero, seedIdea: _premiseCtrl.text);
+        final details = _custom(_setting)?['details'] ?? '';
+        final r = await AiDungeonMaster(settings).premise(setting: details.isEmpty ? _setting : '$_setting: $details', tone: _tone, hero: hero, seedIdea: _premiseCtrl.text);
         _titleCtrl.text = r['title']!;
         _premiseCtrl.text = r['premise']!;
       } else {
@@ -113,10 +156,27 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
     }
   }
 
+  Map<String, String>? _custom(String name) => context.read<SettingsController>().customSettings.where((s) => s['name'] == name).firstOrNull;
+
+  /// A random setting, tone and narrator (and a premise to match).
+  Future<void> _random() async {
+    final r = math.Random();
+    final all = [..._settings.keys, for (final c in context.read<SettingsController>().customSettings) c['name']!];
+    setState(() {
+      _setting = all[r.nextInt(all.length)];
+      _tone = _tones[r.nextInt(_tones.length)];
+      _narrator = r.nextInt(3) == 0 ? '' : narratorTones[r.nextInt(narratorTones.length)].$2;
+      _titleCtrl.clear();
+      _premiseCtrl.clear();
+    });
+    await _generatePremise();
+  }
+
   Future<void> _addCompanion() async {
     final store = context.read<GameStore>();
     final options = store.characters.where((c) => c.id != _heroId && !_companions.any((x) => x.name == c.name)).toList();
-    final picked = await showAppSheet<Character>(
+    final friends = [for (final c in CompanionStore.instance.companions) if (!_fromCompanion.containsValue(c.id)) c];
+    final picked = await showAppSheet<Object>(
       context,
       builder: (ctx) {
         return ListView(
@@ -124,6 +184,26 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
           padding: const EdgeInsets.only(bottom: 24),
           children: [
             const SheetTitle('Add companion', subtitle: 'Companions fight, heal and talk on their own.'),
+            if (friends.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: SectionLabel('Your companions', padding: EdgeInsets.fromLTRB(4, 0, 4, 8)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: RowGroup(
+                  children: [
+                    for (final c in friends)
+                      ListRow(
+                        leading: CompanionAvatar(companion: c, size: 40),
+                        title: c.name,
+                        subtitle: [c.subtitle, if (c.trips.isNotEmpty) '${c.trips.length} adventure${c.trips.length == 1 ? '' : 's'} together'].where((s) => s.isNotEmpty).join(' · '),
+                        onTap: () => Navigator.pop(ctx, c),
+                      ),
+                  ],
+                ),
+              ),
+            ],
             if (options.isNotEmpty) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16),
@@ -176,6 +256,11 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
       },
     );
     if (picked == null) return;
+    if (picked is Companion) {
+      setState(() => _bringCompanion(picked));
+      return;
+    }
+    if (picked is! Character) return;
     final hero = _hero;
     picked.id = newId();
     picked.isCompanion = true;
@@ -211,12 +296,21 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
       textMode: _textMode,
       companions: _companions,
       coverSeed: _seed,
-      scene: SceneInfo(title: 'The Beginning', location: mod?.coverLoc ?? _settings[_setting] ?? 'forest', time: mod?.coverTime ?? 'dusk', mood: 'mystery', seed: _seed),
+      scene: SceneInfo(title: 'The Beginning', location: mod?.coverLoc ?? _settings[_setting] ?? _custom(_setting)?['place'] ?? 'forest', time: mod?.coverTime ?? 'dusk', mood: 'mystery', seed: _seed),
       offline: mod == null ? null : ModuleEngine.createState(mod.id),
       hardcore: _hardcore,
       showDcs: _showDcs,
       chaos: _chaos,
-    );
+    )
+      ..narratorTone = mod == null ? _narrator : ''
+      ..worldNotes = mod == null ? [if ((_custom(_setting)?['details'] ?? '').isNotEmpty) _custom(_setting)!['details']!, if (widget.template != null) templateWorldNotes(widget.template!)].join('\n') : '';
+    final cover = widget.template?['cover'];
+    if (cover is String && cover.isNotEmpty) adv.addMedia(MediaItem(path: cover, kind: 'scene', caption: adv.title));
+    final friends = CompanionStore.instance;
+    for (final ch in _companions) {
+      final c = friends.byId(_fromCompanion[ch.id]);
+      if (c != null) friends.join(c, storyId: adv.id, title: adv.title, kind: 'dnd', personId: ch.id, world: adv);
+    }
     await context.read<GameStore>().saveAdventure(adv, syncHero: false);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
@@ -331,18 +425,43 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
               onSelectionChanged: (v) => setState(() => _textMode = v.first),
             ),
             if (_engine != StoryEngine.module) ...[
-              const SectionLabel('Setting'),
+              SectionLabel('Setting', trailing: TextButton.icon(
+                onPressed: hero == null || _generating ? null : _random,
+                icon: const Icon(Icons.casino_outlined, size: 16),
+                label: Text('Surprise me', style: T.small(color: AppColors.text)),
+              )),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: [for (final s in _settings.keys) ChoiceChip(label: Text(s), selected: _setting == s, onSelected: (_) => setState(() => _setting = s))],
+                children: [
+                  for (final s in _settings.keys) ChoiceChip(label: Text(s), selected: _setting == s, onSelected: (_) => setState(() => _setting = s)),
+                  for (final c in settings.customSettings)
+                    GestureDetector(
+                      onLongPress: () => showSettingEditor(context, existing: c),
+                      child: ChoiceChip(avatar: const Icon(Icons.person_outline, size: 14), label: Text(c['name']!), selected: _setting == c['name'], onSelected: (_) => setState(() => _setting = c['name']!)),
+                    ),
+                  ActionChip(
+                    avatar: const Icon(Icons.add, size: 16),
+                    label: const Text('Your own'),
+                    onPressed: () async {
+                      final name = await showSettingEditor(context);
+                      if (name != null && mounted) setState(() => _setting = name);
+                    },
+                  ),
+                ],
               ),
+              if (_custom(_setting) != null && (_custom(_setting)!['details'] ?? '').isNotEmpty)
+                Padding(padding: const EdgeInsets.only(top: 8), child: Text('${_custom(_setting)!['details']} · long-press to edit', style: T.caption())),
               const SectionLabel('Tone'),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 children: [for (final t in _tones) ChoiceChip(label: Text(t), selected: _tone == t, onSelected: (_) => setState(() => _tone = t))],
               ),
+              if (_engine == StoryEngine.ai) ...[
+                const SectionLabel('Dungeon Master\'s voice (optional)'),
+                NarratorTonePicker(value: _narrator, onChanged: (v) => setState(() => _narrator = v)),
+              ],
             ],
             const SectionLabel('Difficulty'),
             SegmentedButton<String>(
@@ -387,8 +506,11 @@ class _NewAdventureScreenState extends State<NewAdventureScreen> {
                   ListRow(
                     leading: CharacterPortrait(character: c, size: 36),
                     title: c.name,
-                    subtitle: 'Level ${c.level} ${c.classSummary}',
-                    trailing: IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => setState(() => _companions.remove(c))),
+                    subtitle: '${_fromCompanion.containsKey(c.id) ? 'Your companion · ' : ''}Level ${c.level} ${c.classSummary}',
+                    trailing: IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => setState(() {
+                      _companions.remove(c);
+                      _fromCompanion.remove(c.id);
+                    })),
                   ),
                 if (_companions.length < 3) ListRow(leading: const Icon(Icons.add, size: 20), title: 'Add companion', onTap: hero == null ? null : _addCompanion),
               ],

@@ -70,11 +70,11 @@ class _WorldMemoryScreenState extends State<WorldMemoryScreen> {
               onChanged: (s) => setState(() => _query = s),
             ),
             const SizedBox(height: 12),
-            Wrap(
+            CompactChips(child: Wrap(
               spacing: 8,
               runSpacing: 6,
               children: [for (final kind in kinds) ChoiceChip(label: Text(kind), selected: _kind == kind, onSelected: (_) => setState(() => _kind = kind))],
-            ),
+            )),
             const SizedBox(height: 12),
             SegmentedButton<bool>(
               segments: const [

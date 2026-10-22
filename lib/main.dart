@@ -7,8 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'art/scene_painter.dart';
 import 'services/ai/model_catalog.dart';
+import 'services/app_lifecycle.dart';
 import 'services/audio/audio_service.dart';
 import 'services/db/database.dart';
+import 'services/companion_life.dart';
+import 'services/companion_store.dart';
 import 'services/game_store.dart';
 import 'services/tale_store.dart';
 import 'services/image_service.dart';
@@ -20,6 +23,7 @@ import 'services/settings.dart';
 import 'services/studio.dart';
 import 'theme/app_theme.dart';
 import 'ui/screens/achievements_screen.dart';
+import 'ui/screens/companions/companions_screen.dart';
 import 'ui/screens/home_screen.dart';
 import 'ui/screens/onboarding_screen.dart';
 import 'ui/widgets/media_view.dart';
@@ -27,12 +31,16 @@ import 'ui/widgets/media_view.dart';
 /// App-wide messenger so services can show toasts (e.g. achievements).
 final rootMessenger = GlobalKey<ScaffoldMessengerState>();
 
+/// App-wide navigator, so a toast can open the screen it's about.
+final rootNavigator = GlobalKey<NavigatorState>();
+
 Future<void> main() async {
   runZonedGuarded(_start, (e, st) => debugPrint('Uncaught: $e $st'));
 }
 
 Future<void> _start() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLifecycle.instance.start();
   // In release builds a broken widget shows a readable card instead of a grey box.
   ErrorWidget.builder = (details) => _ErrorCard(message: details.exceptionAsString());
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -46,6 +54,7 @@ Future<void> _start() async {
     final db = await AppDatabase.open();
     final store = await GameStore.open(prefs, db);
     final tales = await TaleStore.open(db);
+    final companions = await CompanionStore.open(db);
     final catalog = ModelCatalog(prefs);
     final images = ImageService(settings, catalog);
     final studio = StudioStore(prefs);
@@ -58,11 +67,15 @@ Future<void> _start() async {
     final narrator = Narrator(settings, catalog: catalog);
     final codexArt = CodexArt(prefs);
     final achievements = Achievements(prefs)..onUnlock = (a) => showAchievementToast(rootMessenger.currentState, a);
+    final companionLife = CompanionLife(settings: settings, store: companions, images: images, games: store, tales: tales)
+      ..onText = (c, line) => showCompanionToast(rootMessenger.currentState, rootNavigator, c, line);
     runApp(
       MultiProvider(
         providers: [
           ChangeNotifierProvider.value(value: settings),
           ChangeNotifierProvider.value(value: store),
+          ChangeNotifierProvider.value(value: companions),
+          Provider.value(value: companionLife),
         ChangeNotifierProvider.value(value: tales),
           ChangeNotifierProvider.value(value: catalog),
           ChangeNotifierProvider.value(value: images),
@@ -77,6 +90,7 @@ Future<void> _start() async {
       ),
     );
     unawaited(catalog.ensureLoaded());
+    companionLife.start();
     // Warm up common sounds without blocking startup.
     Future.delayed(const Duration(seconds: 2), () => audio.warmUp().catchError((Object e) => debugPrint('Audio warm-up failed: $e')));
   } catch (e, st) {
@@ -154,6 +168,7 @@ class DndApp extends StatelessWidget {
     return MaterialApp(
       title: 'DnD',
       scaffoldMessengerKey: rootMessenger,
+      navigatorKey: rootNavigator,
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(highContrast: highContrast),
       darkTheme: buildAppTheme(highContrast: highContrast),

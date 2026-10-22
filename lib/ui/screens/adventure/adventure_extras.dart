@@ -103,6 +103,8 @@ class _UsageSheetState extends State<_UsageSheet> {
     final usage = context.watch<UsageTracker>();
     final settings = context.read<SettingsController>();
     final a = widget.story;
+    final storyVoice = a == null ? null : usageBreakdown(a, 'category')['voice'];
+    final allVoice = usage.byCategory['voice'];
     final days = usage.recentDays(14);
     final maxDay = days.fold<double>(0, (m, d) => d.$2.cost > m ? d.$2.cost : m);
     final models = usage.byModel.entries.toList()..sort((x, y) => y.value.cost.compareTo(x.value.cost));
@@ -129,9 +131,19 @@ class _UsageSheetState extends State<_UsageSheet> {
             Expanded(child: StatTile(label: 'Spend', value: fmtCost((a['cost'] ?? 0).toDouble()))),
             const SizedBox(width: 8),
             Expanded(child: StatTile(label: 'Tokens', value: fmtTokens((a['in'] ?? 0) + (a['out'] ?? 0)))),
-            const SizedBox(width: 8),
-            Expanded(child: StatTile(label: 'Media', value: '${(a['images'] ?? 0).toInt()} img · ${(a['videos'] ?? 0).toInt()} vid')),
           ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: StatTile(label: 'Images', value: '${(a['images'] ?? 0).toInt()}')),
+            const SizedBox(width: 8),
+            Expanded(child: StatTile(label: 'Videos', value: '${(a['videos'] ?? 0).toInt()}', sub: (a['seconds'] ?? 0) > 0 ? '${(a['seconds'] ?? 0).toInt()} sec' : null)),
+          ]),
+          const SizedBox(height: 8),
+          StatTile(
+            label: 'Voice',
+            value: '${fmtTokens(storyVoice?.characters ?? (a['chars'] ?? 0))} characters',
+            sub: '${storyVoice?.calls ?? 0} calls · ${fmtCost(storyVoice?.cost ?? 0)}',
+          ),
         ],
         if (a != null && !_allTime) ...[
           UsageBreakdown(values: a),
@@ -144,8 +156,6 @@ class _UsageSheetState extends State<_UsageSheet> {
           Expanded(child: StatTile(label: 'Spend', value: fmtCost(usage.total.cost))),
           const SizedBox(width: 8),
           Expanded(child: StatTile(label: 'Today', value: fmtCost(usage.today.cost))),
-          const SizedBox(width: 8),
-          Expanded(child: StatTile(label: 'Images', value: '${usage.total.images}')),
         ]),
         const SizedBox(height: 8),
         Row(children: [
@@ -153,6 +163,18 @@ class _UsageSheetState extends State<_UsageSheet> {
           const SizedBox(width: 8),
           Expanded(child: StatTile(label: 'Output tokens', value: fmtTokens(usage.total.outputTokens))),
         ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: StatTile(label: 'Images', value: '${usage.total.images}')),
+          const SizedBox(width: 8),
+          Expanded(child: StatTile(label: 'Videos', value: '${usage.total.videos}', sub: usage.total.seconds > 0 ? '${usage.total.seconds} sec' : null)),
+        ]),
+        const SizedBox(height: 8),
+        StatTile(
+          label: 'Voice',
+          value: '${fmtTokens(usage.total.characters)} characters',
+          sub: '${allVoice?.calls ?? 0} calls · ${fmtCost(allVoice?.cost ?? 0)}',
+        ),
         const SectionLabel('All-time usage by feature'),
         for (final item in usage.byCategory.entries)
           ListRow(leading: Icon(usageCategoryIcon(item.key), size: 18), title: usageCategoryLabel(item.key), subtitle: item.value.detail, trailing: Text(fmtCost(item.value.cost), style: T.small())),
@@ -280,7 +302,7 @@ class AdventureUsageList extends StatelessWidget {
             ]),
             const SizedBox(height: 4),
             Text(
-              '${s.who} · ${fmtTokens(s.usage['in'] ?? 0)} in · ${fmtTokens(s.usage['out'] ?? 0)} out · ${(s.usage['calls'] ?? 0).toInt()} calls${(s.usage['images'] ?? 0) > 0 ? ' · ${(s.usage['images'] ?? 0).toInt()} images' : ''}',
+              '${s.who} · ${fmtTokens(s.usage['in'] ?? 0)} in · ${fmtTokens(s.usage['out'] ?? 0)} out · ${(s.usage['calls'] ?? 0).toInt()} calls${(s.usage['images'] ?? 0) > 0 ? ' · ${(s.usage['images'] ?? 0).toInt()} images' : ''}${(s.usage['videos'] ?? 0) > 0 ? ' · ${(s.usage['videos'] ?? 0).toInt()} videos' : ''}${(s.usage['chars'] ?? 0) > 0 ? ' · ${fmtTokens(s.usage['chars'] ?? 0)} voiced chars' : ''}',
               style: T.caption(),
             ),
             TextButton(
